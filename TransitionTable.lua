@@ -77,7 +77,7 @@ function trans:__init(args)
     self.buf_term   = torch.ByteTensor(self.bufferSize):fill(0)
     self.buf_s      = torch.ByteTensor(self.bufferSize, s_size):fill(0)
     self.buf_s2     = torch.ByteTensor(self.bufferSize, s_size):fill(0)
-    self.buf_available_objects = torch.zeros(self.bufferSize, self.numObjects)  
+    self.buf_available_objects = torch.zeros(self.bufferSize, self.numObjects)
 
     if self.gpu and self.gpu >= 0 then
         self.gpu_s  = self.buf_s:float():cuda()
@@ -303,7 +303,7 @@ function trans:add(s, a, o, r, term, available_objects)
     assert(o, 'Object cannot be nil')
     assert(r, 'Reward cannot be nil')
 
-    -- Incremenet until at full capacity
+    -- Increment until at full capacity
     if self.numEntries < self.maxSize then
         self.numEntries = self.numEntries + 1
     end
@@ -405,7 +405,7 @@ end
 
 
 --[[
-Override the read function to desearialize this class from file.
+Override the read function to deserialize this class from file.
 Recreates an empty table.
 
 @param file (FILE object ) @see torch.DiskFile

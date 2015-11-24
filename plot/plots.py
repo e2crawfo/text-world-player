@@ -8,7 +8,7 @@ plt.gcf().subplots_adjust(bottom=0.15)
 
 f = []
 for i in range(1,len(sys.argv)):
-	f.append(map(float, file(sys.argv[i]).read().split('\n')[1:-1]))
+    f.append(map(float, file(sys.argv[i]).read().split('\n')[1:-1]))
 
 max_epochs = 100
 N = min(max_epochs, min(map(len, f)))
@@ -25,8 +25,8 @@ labels = ['LSTM-DQN', 'BI-DQN', 'BOW-DQN']
 # labels = ['No Transfer', 'Transfer']
 # labels = ['Uniform', 'Prioritized']
 for i in range(len(f)):
-	plt.plot(f[i][:N], color=colors[i], label=labels[i], linestyle=linestyles[i], markersize=6, linewidth=3) #normal scale
-	# plt.plot([-math.log(abs(x)) for x in f[i][:N]], color=colors[i], label=labels[i], linestyle=linestyles[i], markersize=6, linewidth=3) #log scale
+    plt.plot(f[i][:N], color=colors[i], label=labels[i], linestyle=linestyles[i], markersize=6, linewidth=3) #normal scale
+    # plt.plot([-math.log(abs(x)) for x in f[i][:N]], color=colors[i], label=labels[i], linestyle=linestyles[i], markersize=6, linewidth=3) #log scale
 
 plt.xlabel('Epochs', fontsize=20)
 

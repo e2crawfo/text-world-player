@@ -10,13 +10,7 @@ cmd:text('Options:')
 cmd:option('-exp_folder', '', 'name of folder where current exp state is being stored')
 cmd:option('-text_world_location', '', 'location of text-world folder')
 
-cmd:option('-framework', '', 'name of training framework')
-
-cmd:option('-env', '', 'name of environment to use')
-cmd:option('-env_params', '', 'string of environment parameters')
 cmd:option('-actrep', 1, 'how many times to repeat action')
-cmd:option('-random_starts', 0, 'play action 0 between 1 and random_starts ' ..
-           'number of times at the start of each training episode')
 
 cmd:option('-name', '', 'filename used for saving network and training history')
 cmd:option('-network', '', 'reload pretrained network')
@@ -30,7 +24,7 @@ cmd:option('-recurrent', 0,'bow or recurrent')
 cmd:option('-bigram', 0,'bigram version')
 cmd:option('-quest_levels', 1,'# of quests to complete in each run')
 cmd:option('-state_dim', 100, 'max dimensionality of raw state (stream of symbols or BOW vocab)')
-cmd:option('-max_steps', 100,'max steps per episode')
+cmd:option('-max_steps', 100, 'max steps per episode')
 
 
 cmd:option('-prog_freq', 5*10^3, 'frequency of progress output')
@@ -46,10 +40,11 @@ cmd:option('-verbose', 2,
 cmd:option('-threads', 1, 'number of BLAS threads')
 cmd:option('-gpu', -1, 'gpu flag')
 cmd:option('-game_num', 1, 'game number (for parallel game servers)')
-cmd:option('-wordvec_file', 'wordvec.eng' , 'Word vector file')
 cmd:option('-tutorial_world', 1, 'play tutorial_world')
 cmd:option('-random_test', 0, 'test random policy')
 cmd:option('-analyze_test', 0, 'load model and analyze')
+
+cmd:option('-wordvec_file', 'wordvec.eng' , 'Word vector file')
 cmd:option('-use_wordvec', 0, 'use word vec')
 
 cmd:text()
@@ -126,7 +121,10 @@ else
     end
 end
 
---- General setup.
+print("Using BoW: " .. tostring(vector_function == convert_text_to_bow))
+print("Using BoBi: " .. tostring(vector_function == convert_text_to_bigram))
+
+-- General setup.
 if opt.agent_params then
     opt.agent_params = str_to_table(opt.agent_params)
     opt.agent_params.gpu       = opt.gpu
@@ -137,8 +135,9 @@ if opt.agent_params then
     end
 
     opt.agent_params.actions = framework.getActions()
-	opt.agent_params.objects = framework.getObjects()
+    opt.agent_params.objects = framework.getObjects()
 
+    -- Set the state dimension of the agent
     if RECURRENT == 0 then
         if vector_function == convert_text_to_bow2 then
             opt.agent_params.state_dim = 2 * (#symbols)
@@ -155,10 +154,12 @@ if opt.agent_params then
 end
 print("state_dim", opt.agent_params.state_dim)
 
+
+-- Initialize the agent
 local agent = dqn[opt.agent](opt.agent_params) -- calls dqn.NeuralQLearner:init
 
 
--- override print to always flush the output
+-- Override print to always flush the output
 local old_print = print
 local print = function(...)
     old_print(...)
@@ -192,45 +193,55 @@ local quest1_reward_cnt, quest2_reward_cnt, quest3_reward_cnt
 
 print('[Start] Network weight sum:',agent.w:sum())
 
+-- ``steps`` is the number of training steps to perform
+-- There are not separate loops that loop over, for example,
+-- different epochs, trajectories, etc. Instead, the we just keep iterating over
+-- steps, and logic within the loop handles moving to the next epoch, moving to the
+-- next trajectory, when to start testing, etc.
 while step < opt.steps do
     step = step + 1
     if not RANDOM_TEST then
-    	xlua.progress(step, opt.steps)
+        -- Not testing the random policy
 
-    	local action_index, object_index = agent:perceive(reward, state, terminal, nil, nil, available_objects, priority)
+        xlua.progress(step, opt.steps)
 
-    	if reward > 0 then
-    	    pos_reward_cnt = pos_reward_cnt + 1
-    	end
+        -- call to the Deep Q-Learner
+        local action_index, object_index = agent:perceive(
+            reward, state, terminal, nil, nil, available_objects, priority)
 
-    	-- game over? get next game!
-    	if not terminal then
-    	    state, reward, terminal, available_objects = framework.step(action_index, object_index)
+        if reward > 0 then
+            pos_reward_cnt = pos_reward_cnt + 1
+        end
 
-    	    --priority sweeping for positive rewards
-    	    if reward > 0 then
-    	        priority = true
-    	    else
-    	        priority = false
-    	    end
-    	else
-    	    state, reward, terminal, available_objects = framework.newGame()
-    	end
+        -- game over? get next game!
+        if not terminal then
+            -- step the environment
+            state, reward, terminal, available_objects = framework.step(action_index, object_index)
 
-    	if step % opt.prog_freq == 0 then
-    	    assert(step==agent.numSteps, 'trainer step: ' .. step ..
-    	            ' & agent.numSteps: ' .. agent.numSteps)
-    	    print("\nSteps: ", step, " | Achieved quest level, current reward:" , pos_reward_cnt)
-    	    agent:report()
-    	    pos_reward_cnt = 0
-    	end
+            -- priority sweeping for positive rewards
+            if reward > 0 then
+                priority = true
+            else
+                priority = false
+            end
+        else
+            state, reward, terminal, available_objects = framework.newGame()
+        end
 
-    	if step%1000 == 0 then
-    	    collectgarbage()
-    	end
+        if step % opt.prog_freq == 0 then
+            assert(step==agent.numSteps, 'trainer step: ' .. step ..
+                    ' & agent.numSteps: ' .. agent.numSteps)
+            print("\nSteps: ", step, " | Achieved quest level, current reward:" , pos_reward_cnt)
+            agent:report()
+            pos_reward_cnt = 0
+        end
+
+        if step%1000 == 0 then
+            collectgarbage()
+        end
     end
 
-	--Testing
+    -- Testing
     if step % opt.eval_freq == 0 and step > learn_start then
         print('Testing Starts ... ')
         quest3_reward_cnt = 0
@@ -281,7 +292,7 @@ while step < opt.steps do
             end
 
             -- Play game in test mode (episodes don't end when losing a life)
-	        state, reward, terminal, available_objects = framework.step(action_index, object_index, gameLogger)
+            state, reward, terminal, available_objects = framework.step(action_index, object_index, gameLogger)
 
             if TUTORIAL_WORLD then
                 if(reward > 9) then
@@ -311,13 +322,15 @@ while step < opt.steps do
                 nepisodes = nepisodes + 1
                 state, reward, terminal, available_objects = framework.newGame(gameLogger)
             end
-        end
+        end -- for
 
         eval_time = sys.clock() - eval_time
         start_time = start_time + eval_time
-	if not RANDOM_TEST then
+
+        if not RANDOM_TEST then
             agent:compute_validation_statistics()
-	end
+        end
+
         local ind = #reward_history+1
         total_reward = total_reward/math.max(1, nepisodes)
 
@@ -330,7 +343,9 @@ while step < opt.steps do
             td_history[ind] = agent.tderr_avg
             qmax_history[ind] = agent.q_max
         end
-        print("V", v_history[ind], "TD error", td_history[ind], "V avg:", v_history[ind])
+        print(
+            "V", v_history[ind], "TD error",
+            td_history[ind], "V avg:", v_history[ind])
 
         --saving and plotting
         test_avg_R:add{['% Average Reward'] = total_reward}
@@ -348,7 +363,6 @@ while step < opt.steps do
             test_quest2:style{['% Quest 2'] = '-'}; test_quest2:plot()
             test_quest3:style{['% Quest 3'] = '-'}; test_quest3:plot()
         end
-
 
         reward_history[ind] = total_reward
         reward_counts[ind] = nrewards
@@ -371,11 +385,12 @@ while step < opt.steps do
 
         pos_reward_cnt = 0
         quest1_reward_cnt = 0
-        gameLogger:write("###############\n\n") --end of testing epoch
+        gameLogger:write("###############\n\n") -- end of testing epoch
         print('Testing Ends ... ')
         collectgarbage()
-    end
+    end -- Testing
 
+    -- Saving
     if step % opt.save_freq == 0 or step == opt.steps then
         local s, a, r, s2, term = agent.valid_s, agent.valid_a, agent.valid_r,
             agent.valid_s2, agent.valid_term
@@ -443,5 +458,5 @@ while step < opt.steps do
         if ANALYZE_TEST then
             return
         end
-    end
+    end -- Saving
 end

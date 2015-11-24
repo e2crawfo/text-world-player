@@ -85,6 +85,7 @@ function nql:__init(args)
             self.network = exp.model
         end
     else
+        -- Load one of the files in the `embeddings` dir.
         print('Creating Agent Network from ' .. self.network)
         self.network = msg
         self.network = self:network()
@@ -385,8 +386,10 @@ function nql:perceive(reward, state, terminal, testing, testing_ep, available_ob
     --Store transition s, a, r, s' (only if not testing)
     -- IMP: available_objects is for selecting an action at s'
     if self.lastState and not testing then
-        self.transitions:add(self.lastState, self.lastAction, self.lastObject, reward,
-                             self.lastTerminal, table_to_binary_tensor(available_objects, self.n_objects))
+        self.transitions:add(
+            self.lastState, self.lastAction, self.lastObject, reward,
+            self.lastTerminal,
+            table_to_binary_tensor(available_objects, self.n_objects))
     end
 
     if self.numSteps == self.learn_start+1 and not testing then

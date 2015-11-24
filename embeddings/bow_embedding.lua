@@ -1,4 +1,5 @@
---BOW 
+--BOW or BOB; both use the same network, but different vector_functions
+
 require 'nn'
 --require 'cunn'
 -- IMP if args is not passed, it takes from global 'args'
@@ -19,10 +20,10 @@ return function(args)
         mlp_out:add(nn.Linear(n_hid, args.n_objects))
 
         mlp:add(mlp_out)
-        
+
         if args.gpu >=0 then
             mlp:cuda()
-        end    
+        end
         return mlp
     end
 

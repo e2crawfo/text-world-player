@@ -13,7 +13,7 @@ return function(args)
     -- overriding LSTM factory functions below
 
     LSTM = nn.LSTM
-    
+
     -- incoming is {input(t), output(t-1), cell(t-1)}
     function LSTM:buildModel()
        -- build components
@@ -33,7 +33,7 @@ return function(args)
        local model = nn.Sequential()
        model:add(input_transform)
        model:add(concat)
-       -- output of concat is {{input, output}, cell(t)}, 
+       -- output of concat is {{input, output}, cell(t)},
        -- so flatten to {input, output, cell(t)}
        model:add(nn.FlattenTable())
        local cellAct = nn.Sequential()
@@ -68,7 +68,7 @@ return function(args)
           prevOutput = self.output
           prevCell = self.cell
        end
-          
+
        -- output(t), cell(t) = lstm{input(t), output(t-1), cell(t-1)}
        local output, cell
        if self.train ~= false then
@@ -79,20 +79,20 @@ return function(args)
        else
           output, cell = unpack(self.recurrentModule:updateOutput{input, prevOutput, prevCell})
        end
-       
+
        if self.train ~= false then
           local input_ = self.inputs[self.step]
-          self.inputs[self.step] = self.copyInputs 
-             and rnn.recursiveCopy(input_, input) 
-             or rnn.recursiveSet(input_, input)     
+          self.inputs[self.step] = self.copyInputs
+             and rnn.recursiveCopy(input_, input)
+             or rnn.recursiveSet(input_, input)
        end
-       
+
        self.outputs[self.step] = output
        self.cells[self.step] = cell
-       
+
        self.output = output
        self.cell = cell
-       
+
        self.step = self.step + 1
        self.gradParametersAccumulated = false
        -- note that we don't return the cell, just the output
@@ -100,14 +100,14 @@ return function(args)
     end
 
     function create_network(args)
-      
+
         l  = LSTM(n_hid, n_hid)
 
-        lstm = nn.Sequential()    
+        lstm = nn.Sequential()
 
         lstm_seq = nn.Sequential()
         lstm_seq:add(nn.Sequencer(l))
-        
+
         --Take only last output
         -- lstm_seq:add(nn.SelectTable(args.state_dim))
         -- lstm_seq:add(nn.Linear(n_hid, n_hid))
@@ -119,7 +119,7 @@ return function(args)
         -- Mean pooling
         lstm_seq:add(nn.CAddTable())
         lstm_seq:add(nn.Linear(n_hid, n_hid))
-        
+
 
         lstm_seq:add(nn.Rectifier())
 
@@ -128,7 +128,7 @@ return function(args)
         for f=1, args.hist_len * args.state_dim_multiplier do
             if f > 1 then
                 parallel_flows:add(lstm_seq:clone("weight","bias","gradWeight", "gradBias")) -- TODO share 'weight' and 'bias'
-            else                
+            else
                 parallel_flows:add(lstm_seq) -- TODO share 'weight' and 'bias'
             end
         end
@@ -141,10 +141,10 @@ return function(args)
         lstm:add(nn.JoinTable(2))
         lstm:add(lstm_out)
 
-        
+
         if args.gpu >=0 then
             lstm:cuda()
-        end    
+        end
         return lstm
     end
     LSTM_MODEL = lstm_seq

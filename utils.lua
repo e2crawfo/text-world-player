@@ -5,18 +5,18 @@ function sleep(n)  -- seconds
 end
 
 function split(s, pattern)
-	local parts = {}
-	for i in string.gmatch(s, pattern) do
-  	table.insert(parts, i)
-	end
-	return parts
+    local parts = {}
+    for i in string.gmatch(s, pattern) do
+      table.insert(parts, i)
+    end
+    return parts
 end
 
-function string.starts(String,Start)
+function string.starts(String, Start)
    return string.sub(String,1,string.len(Start))==Start
 end
 
-function string.ends(String,End)
+function string.ends(String, End)
    return End=='' or string.sub(String,-string.len(End))==End
 end
 
@@ -36,7 +36,7 @@ function reverse_tensor(tensor)
 end
 
 -- function specific to make available_objects tensor
-function table_to_binary_tensor(t,N)   
+function table_to_binary_tensor(t,N)
   local tensor
   if t then
     tensor = torch.zeros(N)
@@ -48,8 +48,6 @@ function table_to_binary_tensor(t,N)
   end
   return tensor
 end
-
-
 
 function str_to_table(str)
     if type(str) == 'table' then
@@ -64,6 +62,7 @@ function str_to_table(str)
     local ttr
     if str ~= '' then
         local ttx=tt
+        print("str: " .. str)
         loadstring('tt = {' .. str .. '}')()
         ttr = tt
         tt = ttx
@@ -76,7 +75,7 @@ end
 -- IMP: very specific function - do not use for arbitrary tensors
 function tensor_to_table(tensor, state_dim, hist_len)
   batch_size = tensor:size(1)
-  local NULL_INDEX = #symbols+1 
+  local NULL_INDEX = #symbols+1
 
   -- convert 0 to NULL_INDEX (this happens when hist doesn't go back as far as hist_len in chain)
   for i=1, tensor:size(1) do
@@ -111,11 +110,11 @@ function tensor_to_table(tensor, state_dim, hist_len)
     for j=1, tensor:size(2)/state_dim do
       t2_tmp = {}
       for i=(j-1)*state_dim+1,j*state_dim do
-        t2_tmp[i%state_dim] = tensor[{{}, {i}}]:reshape(batch_size)   
+        t2_tmp[i%state_dim] = tensor[{{}, {i}}]:reshape(batch_size)
       end
       t2_tmp[state_dim] = t2_tmp[0]
       t2_tmp[0] = nil
-      table.insert(t2, t2_tmp)   
+      table.insert(t2, t2_tmp)
     end
   end
 
@@ -129,7 +128,6 @@ function tensor_to_table(tensor, state_dim, hist_len)
 
   return t2
 end
-
 
 function table.copy(t)
     if t == nil then return nil end
