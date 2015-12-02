@@ -44,7 +44,7 @@ symbols = {}
 symbol_mapping = {}
 object_mapping = {}
 
-NUM_ROOMS = 4
+local NUM_ROOMS = 4
 
 
 local current_room_description = ""
@@ -206,97 +206,6 @@ function makeSymbolMapping(filename)
     object_mapping['back to antechamber'] = object_mapping['antechamber']
 end
 
--- input_text is just a string with the room description
-function convert_text_to_bow(input_text)
-    local vector = torch.zeros(#symbols)
-    local line = string.gsub(input_text, "{.","")
-    local list_words = split(line, "%a+")
-    for i=1,#list_words do
-        local word = list_words[i]
-        word = word:lower()
-
-        if symbol_mapping[word] then
-            vector[symbol_mapping[word]] = vector[symbol_mapping[word]] + 1
-        else
-            -- print("<"..word .. '> not in vocab')
-        end
-
-    end
-
-    return vector
-end
-
--- Args: {
---    1: desc of room
---    2: quest desc
--- }
-bigram_mapping = {}
-bigrams = {}
-function convert_text_to_bigram(input_text)
-    local vector = torch.zeros(#symbols * 5)
-    local line = string.gsub(input_text, "{.","")
-    local list_words = split(line, "%a+")
-    for i=1,#list_words-1 do
-        local word = list_words[i]
-        word = word:lower()
-
-        next_word = list_words[i+1]:lower()
-        bigram = word .. ' ' .. next_word
-
-        if not bigram_mapping[bigram] then
-            table.insert(bigrams, bigram)
-            bigram_mapping[bigram] = #bigrams
-
-            vector[bigram_mapping[bigram]] = vector[bigram_mapping[bigram]]  + 1
-        else
-            -- print(word .. ' not in vocab')
-        end
-
-    end
-
-    return vector
-end
-
-
-
--- for recurrent and other networks
--- assumes that the symbol mapping has already been created
--- STATE_DIM = max desc/quest length
-function convert_text_to_ordered_list(input_text)
-    local NULL_INDEX = #symbols + 1
-    local vector = torch.ones(STATE_DIM) * NULL_INDEX
-    local REVERSE = true --reverse the order of words to have padding in beginning
-    cnt=1
-
-    local line = string.gsub(input_text, "{.","")
-    local list_words = split(line, "%a+")
-    for i=1,math.min(#list_words, STATE_DIM) do
-        local word = list_words[i]
-        word = word:lower()
-        if REVERSE then cnt2 = STATE_DIM+1-cnt else cnt2 = cnt end
-
-        if symbol_mapping[word] then
-            vector[cnt2] = symbol_mapping[word]
-        else
-            -- print(word .. ' not in vocab')
-            -- print(input_text)
-        end
-        cnt=cnt+1
-    end
-
-    return vector
-end
-
-
--------------------------VECTOR function -------------------------
-if RECURRENT == 1 then
-    vector_function = convert_text_to_ordered_list
-elseif BIGRAM == 1 then
-    vector_function = convert_text_to_bigram
-else
-    vector_function = convert_text_to_bow
-end
--------------------------------------------------------------------
 
 -- Find the indices of objects given their textual forms
 function findObjectIndices(list)
@@ -363,7 +272,6 @@ function getState(logger, prev_command)
         print(text, reward)
     end
 
-    local vector = vector_function(text)
     local available_objects
     if #exits + #objects_available > 0 then
         available_objects = findObjectIndices(TableConcat(exits, objects_available))
@@ -380,7 +288,7 @@ function getState(logger, prev_command)
             logger:write('****************************\n\n')
         end
     end
-    return vector, reward, terminal, available_objects
+    return text, reward, terminal, available_objects
 end
 
 

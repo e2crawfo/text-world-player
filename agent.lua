@@ -1,5 +1,6 @@
 -- agent
 require 'torch'
+package.path = package.path .. ';networks/?.lua'
 
 local cmd = torch.CmdLine()
 cmd:text()
@@ -12,20 +13,19 @@ cmd:option('-text_world_location', '', 'location of text-world folder')
 
 cmd:option('-actrep', 1, 'how many times to repeat action')
 
+cmd:option('-representation', '', 'The type of representation to use. Can be "bow", "bob", "mvrnn", "rnn", or "lstm".')
+cmd:option('-regressor', '', 'The type of regressor to use. Can be "deep" or "shallow".')
+
 cmd:option('-name', '', 'filename used for saving network and training history')
 cmd:option('-network', '', 'reload pretrained network')
-cmd:option('-agent', '', 'name of agent file to use')
 cmd:option('-agent_params', '', 'string of agent parameters')
 cmd:option('-seed', 1, 'fixed input seed for repeatable experiments')
 cmd:option('-saveNetworkParams', false,
            'saves the agent network in a separate file')
 
-cmd:option('-recurrent', 0,'bow or recurrent')
-cmd:option('-bigram', 0,'bigram version')
 cmd:option('-quest_levels', 1,'# of quests to complete in each run')
-cmd:option('-state_dim', 100, 'max dimensionality of raw state (stream of symbols or BOW vocab)')
+cmd:option('-recurrent_dim', 100, 'max dimensionality of recurrent state (stream of symbols)')
 cmd:option('-max_steps', 100, 'max steps per episode')
-
 
 cmd:option('-prog_freq', 5*10^3, 'frequency of progress output')
 cmd:option('-save_freq', 5*10^4, 'the model is saved every save_freq steps')
@@ -51,18 +51,18 @@ cmd:text()
 
 local opt = cmd:parse(arg)
 print(opt)
-RECURRENT = opt.recurrent
-BIGRAM = opt.bigram
+
+assert (opt.representation ~= '', "-representation must be supplied.")
+
+RECURRENT = opt.representation == 'rnn' or opt.representation == 'lstm'
 QUEST_LEVELS = opt.quest_levels
-STATE_DIM = opt.state_dim
 MAX_STEPS = opt.max_steps
 WORDVEC_FILE = opt.wordvec_file
 TUTORIAL_WORLD = (opt.tutorial_world==1)
 RANDOM_TEST = (opt.random_test==1)
 ANALYZE_TEST = (opt.analyze_test==1)
 
-print(STATE_DIM)
-print("Tutorial world", TUTORIAL_WORLD)
+print("Using Tutorial world?", TUTORIAL_WORLD)
 
 require 'client'
 require 'utils'
@@ -75,21 +75,30 @@ if TUTORIAL_WORLD then
 else
     framework = require 'framework'
 end
-
 ---------------------------------------------------------------
 
+-- e2crawfo: This seems to be causing some weird version of underscore to be imported...
 if not dqn then
     dqn = {}
     require 'nn'
     require 'nngraph'
     require 'nnutils'
-    -- require 'Scale'
     require 'NeuralQLearner'
     require 'TransitionTable'
     require 'Rectifier'
     require 'Embedding'
+
+    require 'networks/rnn'
+    require 'networks/lstm'
+    require 'networks/mvrnn'
+    require 'networks/text_to_vector.lua'
+    require 'networks/regression.lua'
 end
---  agent login
+
+-- Need to do it here so that the earlier requires don't overwrite _
+_ = require 'underscore'
+
+-- agent login
 local port = 4000 + opt.game_num
 print(port)
 client_connect(port)
@@ -101,28 +110,10 @@ else
     framework.makeSymbolMapping(opt.text_world_location .. 'evennia/contrib/text_sims/build.ev')
 end
 
-print("#symbols", #symbols)
+print (opt.agent_params)
 
-EMBEDDING.weight[#symbols+1]:mul(0) --zero out NULL INDEX vector
+state_dim = framework.getStateDim()
 
--- init with word vec
-if opt.use_wordvec==1 then
-    print(WORDVEC_FILE)
-    local wordVec = readWordVec(WORDVEC_FILE)
-    print(#wordVec)
-    for i=1, #symbols do
-        print("wordvec", symbols[i], wordVec[symbols[i]])
-        EMBEDDING.weight[i] = torch.Tensor(wordVec[symbols[i]])
-        assert(EMBEDDING.weight[i]:size(1) == n_hid)
-    end
-else
-    for i=1, #symbols do
-        EMBEDDING.weight[i] = torch.rand(EMBEDDING.weight[i]:size(1))*0.02-0.01
-    end
-end
-
-print("Using BoW: " .. tostring(vector_function == convert_text_to_bow))
-print("Using BoBi: " .. tostring(vector_function == convert_text_to_bigram))
 
 -- General setup.
 if opt.agent_params then
@@ -130,34 +121,116 @@ if opt.agent_params then
     opt.agent_params.gpu       = opt.gpu
     opt.agent_params.best      = opt.best
     opt.agent_params.verbose   = opt.verbose
-    if opt.network ~= '' then
-        opt.agent_params.network = opt.network
-    end
 
     opt.agent_params.actions = framework.getActions()
     opt.agent_params.objects = framework.getObjects()
 
-    -- Set the state dimension of the agent
-    if RECURRENT == 0 then
-        if vector_function == convert_text_to_bow2 then
-            opt.agent_params.state_dim = 2 * (#symbols)
-        elseif vector_function == convert_text_to_bigram then
-            if TUTORIAL_WORLD then
-                opt.agent_params.state_dim = (#symbols*5)
-            else
-                opt.agent_params.state_dim = (#symbols*#symbols)
-            end
-        else
-            opt.agent_params.state_dim = (#symbols)
-        end
-    end
+    opt.agent_params.state_dim = state_dim
 end
-print("state_dim", opt.agent_params.state_dim)
+
+
+wv_dim = 20
+random_vec_func = (
+    function (size)
+        return torch.rand(size)*0.02-0.01
+    end
+)
+wv_init = opt.use_wordvec == 1 and readWordVec(WORDVEC_FILE) or nil
+wv_func = nil
+
+if wv_init then
+
+    function make_wv_func (wv_init)
+        local function f (size, word)
+            return torch.Tensor(size):copy(wv_init[word])
+        end
+
+        return f
+    end
+
+    wv_func = make_wv_func(wv_init)
+else
+    wv_func = random_vec_func
+end
+
+
+-- Make the representation
+rep = opt.representation
+rep_network = nil
+rep_dim = nil
+
+if rep == "bow" then
+    print ("Using " .. rep)
+    rep_network, rep_dim = text_to_vector.make_bow(symbols, symbol_mapping)
+elseif rep == "bob" then
+    print ("Using " .. rep)
+    rep_network, rep_dim = text_to_vector.make_bob(symbols, symbol_mapping)
+elseif rep == "mvrnn" then
+    print ("Using " .. rep)
+    r = 3
+    nl_class = nn.Tanh
+
+    rep_network, rep_dim = mvrnn.make_mvrnn(
+         wv_dim, r, nl_class, mvrnn.CTS, mvrnn.MEAN, random_vec_func, wv_func)
+
+elseif rep == "lstm" or "rnn" then
+
+    recurrent_dim = opt.recurrent_dim
+    ol_network, ol_dim = text_to_vector.make_ordered_list(symbols, symbol_mapping, recurrent_dim)
+
+    -- Need to set this global variable before creating LSTM or RNN
+    EMBEDDING = Embedding(#symbols+1, wv_dim)
+    EMBEDDING:setWordVecs(symbols, wv_func)
+
+    if rep == "lstm" then
+        print ("Using " .. rep)
+        rep_network, rep_dim = lstm.make_lstm(opt.agent_params.hist_len, opt.gpu)
+    else
+        print ("Using " .. rep)
+        rep_network, rep_dim = rnn.make_rnn(
+            recurrent_dim, opt.agent_params.hist_len, opt.gpu)
+    end
+
+    rep_network = (
+        nn.Sequential()
+        :add(ol_network)
+        :add(rep_network))
+else
+    error("Invalid representation `" .. rep .. "` supplied.")
+end
+
+
+-- Make the regressor
+regressor = opt.regressor
+regressor_network = nil
+
+n_actions = #(framework.getActions())
+n_objects = #(framework.getObjects())
+
+print(n_actions, n_objects, rep_dim, opt.gpu)
+
+if regressor == "shallow" then
+    print ("Using " .. regressor)
+    regressor_network = regression.make_shallow_regressor(rep_dim, n_actions, n_objects, opt.gpu)
+elseif regressor == "deep" then
+    print ("Using " .. regressor)
+    n_hid = 100
+    regressor_network = regression.make_deep_regressor(rep_dim, n_hid, n_actions, n_objects, opt.gpu)
+else
+    error("Invalid regressor `" .. regressor .. "` supplied.")
+end
+
+
+-- Put the pieces together
+opt.agent_params.network = (
+    nn.Sequential()
+    :add(rep_network)
+    :add(regressor_network)
+)
 
 
 -- Initialize the agent
-local agent = dqn[opt.agent](opt.agent_params) -- calls dqn.NeuralQLearner:init
-
+local agent = dqn.NeuralQLearner(opt.agent_params)
 
 -- Override print to always flush the output
 local old_print = print
@@ -186,6 +259,7 @@ local episode_reward
 
 local state, reward, terminal, available_objects = framework.newGame()
 local priority = false
+
 print("Started RL based training ...")
 local pos_reward_cnt = 0
 local quest1_reward_cnt, quest2_reward_cnt, quest3_reward_cnt
@@ -419,33 +493,35 @@ while step < opt.steps do
             torch.save(filename..'.params.t7', nets, 'ascii')
         end
 
-        -- save word embeddings
-        embedding_mat = EMBEDDING:forward(torch.range(1, #symbols+1))
-        embedding_save = {}
-        for i=1, embedding_mat:size(1)-1 do
-            embedding_save[symbols[i]] = embedding_mat[i]
-        end
-        embedding_save["NULL"] = embedding_mat[embedding_mat:size(1)]
-
-        -- description embeddings
-        local desc_embeddings
-        if ANALYZE_TEST then
-            require 'descriptions'
-            desc_embeddings = {}
-            for i=1, #DESCRIPTIONS do
-                local embeddings = {}
-                for j=1, #DESCRIPTIONS[i] do
-                    local input_vec = framework.vector_function(DESCRIPTIONS[i][j])
-                    local state_tmp = tensor_to_table(input_vec, self.state_dim, self.hist_len)
-                    local output_vec = LSTM_MODEL:forward(state_tmp)
-                    table.insert(embeddings, output_vec)
-                end
-                table.insert(desc_embeddings, embeddings)
+        if EMBEDDING then
+            -- save word embeddings
+            embedding_mat = EMBEDDING:forward(torch.range(1, #symbols+1))
+            embedding_save = {}
+            for i=1, embedding_mat:size(1)-1 do
+                embedding_save[symbols[i]] = embedding_mat[i]
             end
+            embedding_save["NULL"] = embedding_mat[embedding_mat:size(1)]
+
+            -- description embeddings
+            local desc_embeddings
+            if ANALYZE_TEST then
+                require 'descriptions'
+                desc_embeddings = {}
+                for i=1, #DESCRIPTIONS do
+                    local embeddings = {}
+                    for j=1, #DESCRIPTIONS[i] do
+                        local input_vec = framework.vector_function(DESCRIPTIONS[i][j])
+                        local state_tmp = tensor_to_table(input_vec, self.state_dim, self.hist_len)
+                        local output_vec = LSTM_MODEL:forward(state_tmp)
+                        table.insert(embeddings, output_vec)
+                    end
+                    table.insert(desc_embeddings, embeddings)
+                end
+            end
+            torch.save(
+                filename..'.embeddings.t7',
+                {embeddings = embedding_save, symbols=symbols, desc_embeddings=desc_embeddings})
         end
-
-
-        torch.save(filename..'.embeddings.t7', {embeddings = embedding_save, symbols=symbols, desc_embeddings=desc_embeddings})
 
         agent.valid_s, agent.valid_a, agent.valid_r, agent.valid_s2,
             agent.valid_term = s, a, r, s2, term

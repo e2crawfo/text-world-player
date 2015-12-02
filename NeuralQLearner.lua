@@ -7,11 +7,6 @@ local nql = torch.class('dqn.NeuralQLearner')
 
 
 function nql:__init(args)
-    if vector_function == convert_text_to_ordered_list2 then
-        self.state_dim_multiplier = 2
-    else
-        self.state_dim_multiplier = 1
-    end
     self.state_dim  = args.state_dim -- State dimensionality.
     self.actions    = args.actions
     self.n_actions  = #self.actions
@@ -62,42 +57,42 @@ function nql:__init(args)
 
     self.transition_params = args.transition_params or {}
 
-    self.network    = args.network or self:createNetwork()
+    self.network    = args.network
 
     -- check whether there is a network file
-    local network_function
-    if not (type(self.network) == 'string') then
-        error("The type of the network provided in NeuralQLearner" ..
-              " is not a string!")
-    end
+    -- if not (type(self.network) == 'string') then
+    --     error("The type of the network provided in NeuralQLearner" ..
+    --           " is not a string!")
+    -- end
 
-    local err, msg = pcall(require, self.network)
-    if not err then
-        print('Preloading network file:', self.network)
-        -- try to load saved agent
-        local err_msg, exp = pcall(torch.load, self.network)
-        if not err_msg then
-            error("Could not find network file ")
-        end
-        if self.best and exp.best_model then
-            self.network = exp.best_model
-        else
-            self.network = exp.model
-        end
-    else
-        -- Load one of the files in the `embeddings` dir.
-        print('Creating Agent Network from ' .. self.network)
-        self.network = msg
-        self.network = self:network()
-    end
+    -- Don't do this anymore, since we're passing in the network that we want to use
+    -- local err, msg = pcall(require, self.network)
+    -- if not err then
+    --     print('Preloading network file:', self.network)
+    --     -- try to load saved agent
+    --     local err_msg, exp = pcall(torch.load, self.network)
+    --     if not err_msg then
+    --         error("Could not find network file ")
+    --     end
+    --     if self.best and exp.best_model then
+    --         self.network = exp.best_model
+    --     else
+    --         self.network = exp.model
+    --     end
+    -- else
+    --     -- Load one of the files in the `embeddings` dir.
+    --     print('Creating Agent Network from ' .. self.network)
+    --     self.network = msg
+    --     self.network = self:network()
+    -- end
 
-    if self.gpu and self.gpu >= 0 then
+    if self.gpu == 1 then
         self.network:cuda()
     else
         self.network:float()
     end
 
-    if self.gpu and self.gpu >= 0 then
+    if self.gpu == 1 then
         self.network:cuda()
         self.tensor_type = torch.CudaTensor
     else
@@ -151,7 +146,7 @@ function nql:reset(state)
         return
     end
     self.best_network = state.best_network
-    self.network = state.model
+    -- self.network = state.model
     self.w, self.dw = self.network:getParameters()
     self.dw:zero()
     self.numSteps = 0
@@ -185,12 +180,7 @@ function nql:getQUpdate(args)
     end
 
     -- Compute {max_a Q(s_2, a), max_o Q(s_2, o)}.
-    if RECURRENT == 0 then
-        q2_max = target_q_net:forward(s2)
-    else
-        local s2_tmp = tensor_to_table(s2, self.state_dim, self.hist_len)
-        q2_max = target_q_net:forward(s2_tmp)
-    end
+    q2_max = target_q_net:forward(s2)
 
     q2_max[1] = q2_max[1]:float():max(2) --actions
     q2_max[2] = q2_max[2]:float() -- objects
@@ -214,14 +204,7 @@ function nql:getQUpdate(args)
 
     -- q = Q(s,a)
     local q_all
-    if RECURRENT == 0 then
-        q_all = self.network:forward(s)
-    else
-        local s_tmp = tensor_to_table(s, self.state_dim, self.hist_len)
-        -- print(s_tmp)
-        q_all = self.network:forward(s_tmp)
-    end
-
+    q_all = self.network:forward(s)
 
     q_all[1] = q_all[1]:float()
     q_all[2] = q_all[2]:float()
@@ -253,7 +236,7 @@ function nql:getQUpdate(args)
         targets[2][i][o[i]] = delta[2][i]
     end
 
-    if self.gpu >= 0 then targets = targets:cuda() end
+    if self.gpu == 1 then targets = targets:cuda() end
 
     return targets, delta, q2_max
 end
@@ -273,12 +256,7 @@ function nql:qLearnMinibatch()
     self.dw:zero()
 
     -- get new gradient
-    if RECURRENT == 0 then
-        self.network:backward(s, targets)
-    else
-        local s_tmp = tensor_to_table(s, self.state_dim, self.hist_len)
-        self.network:backward(s_tmp, targets)
-    end
+    self.network:backward(s, targets)
 
     -- add weight cost to gradient
     self.dw:add(-self.wc, self.w)
@@ -437,83 +415,28 @@ function nql:perceive(reward, state, terminal, testing, testing_ep, available_ob
     end
 end
 
--- sample an action and object instead of just taking max
-function nql:sample_action(state, testing_ep, available_objects)
-   if self.gpu >= 0 then
-        state = state:cuda()
-    end
-    local q
-    if RECURRENT == 0 then
-        q = self.network:forward(state)
-    else
-        -- print("state", state)
-        local state_tmp = tensor_to_table(state, self.state_dim, self.hist_len)
-        -- print("state_tmp", state_tmp)
-        q = self.network:forward(state_tmp)
-    end
-
-    q[1] = q[1]:float():squeeze()
-    q[2] = q[2]:float():squeeze()
-
-    orig_q = {q[1]:clone(), q[2]:clone()}
-
-    q[1] = q[1]:double()
-    q[2] = q[2]:double()
-    q[1] = q[1] - q[1]:min()
-    q[2] = q[2] - q[2]:min()
-
-    q[1]:exp()
-    -- q[1]:div(q[1]:norm())
-    -- convert available objects to tensor
-    available_objects = table_to_binary_tensor(available_objects, self.n_objects)
-    q[2]:exp()
-    q[2]:cmul(available_objects)
-    -- q[2]:div(q[2]:norm())
-
-    -- if q[1]:sum()<=0 or q[1]:max() > 1e3 or q[1]:min() < -1e3 then
-    --     print("q[1]", q[1])
-    -- end
-
-    -- if q[2]:sum()<=0 or q[2]:max() > 1e3 or q[2]:min() < -1e3 then
-    --     print("q[2]", q[2])
-    -- end
-
-    local status, sample_a = pcall(torch.multinomial, q[1], 1)
-    if not status then
-        print(q[1], orig_q[1])
-        print(q[2], orig_q[2])
-        assert(false)
-    else
-        sample_a = sample_a[1]
-    end
-    local sample_o = torch.multinomial(q[2], 1)[1]
-
-    self.lastAction = sample_a
-    self.lastObject = sample_o
-    self.bestq = (q[1][sample_a] + q[2][sample_o])/2
-
-    return sample_a, sample_o, q
-end
-
-
 
 function nql:eGreedy(state, testing_ep, available_objects)
     self.ep = testing_ep or (self.ep_end +
                 math.max(0, (self.ep_start - self.ep_end) * (self.ep_endt -
                 math.max(0, self.numSteps - self.learn_start))/self.ep_endt))
 
-    -- print("EPS:", self.ep)
+    print("Using epsilon: ", self.ep)
+
     -- Epsilon greedy
     if torch.uniform() < self.ep then
+        print("Being random")
         if not available_objects then
             return torch.random(1, self.n_actions), torch.random(1, self.n_objects)
         else
             return torch.random(1, self.n_actions), available_objects[math.random(#available_objects)]
         end
     else
+        print("Being greedy")
         return self:greedy(state, available_objects)
     end
 end
+
 
 -- Evaluate all actions (with random tie-breaking)
 function nql:getBestRandom(q, N, available_objects)
@@ -555,18 +478,11 @@ end
 
 
 function nql:greedy(state, available_objects)
-    if self.gpu >= 0 then
+    if self.gpu == 1 then
         state = state:cuda()
     end
-    local q
-    if RECURRENT == 0 then
-        q = self.network:forward(state)
-    else
-        -- print("state", state)
-        local state_tmp = tensor_to_table(state, self.state_dim, self.hist_len)
-        -- print("state_tmp", state_tmp)
-        q = self.network:forward(state_tmp)
-    end
+
+    q = self.network:forward(state)
 
     q[1] = q[1]:float():squeeze()
     q[2] = q[2]:float():squeeze()
@@ -588,7 +504,7 @@ end
 
 function nql:_loadNet()
     local net = self.network
-    if self.gpu then
+    if self.gpu == 1 then
         net:cuda()
     else
         net:float()

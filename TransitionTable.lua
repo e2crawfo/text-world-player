@@ -5,11 +5,7 @@ local trans = torch.class('dqn.TransitionTable')
 
 
 function trans:__init(args)
-    if vector_function == convert_text_to_ordered_list2 then
-        self.stateDim = args.stateDim * 2 -- @karthik: double state-dim for desc and quest separately
-    else
-        self.stateDim  = args.stateDim -- State dimensionality.
-    end
+    self.stateDim  = args.stateDim
     self.numActions = args.numActions
     self.numObjects = args.numObjects
     self.histLen = args.histLen
@@ -79,7 +75,7 @@ function trans:__init(args)
     self.buf_s2     = torch.ByteTensor(self.bufferSize, s_size):fill(0)
     self.buf_available_objects = torch.zeros(self.bufferSize, self.numObjects)
 
-    if self.gpu and self.gpu >= 0 then
+    if self.gpu == 1 then
         self.gpu_s  = self.buf_s:float():cuda()
         self.gpu_s2 = self.buf_s2:float():cuda()
     end
@@ -124,7 +120,7 @@ function trans:fill_buffer(priority_ratio)
     end
     self.buf_s  = self.buf_s:float()
     self.buf_s2 = self.buf_s2:float()
-    if self.gpu and self.gpu >= 0 then
+    if self.gpu == 1 then
         self.gpu_s:copy(self.buf_s)
         self.gpu_s2:copy(self.buf_s2)
     end
@@ -184,7 +180,7 @@ function trans:sample(batch_size, priority_ratio)
 
     local buf_s, buf_s2, buf_a, buf_o, buf_r, buf_term, buf_available_objects = self.buf_s, self.buf_s2,
         self.buf_a, self.buf_o, self.buf_r, self.buf_term, self.buf_available_objects
-    if self.gpu and self.gpu >=0  then
+    if self.gpu == 1 then
         buf_s = self.gpu_s
         buf_s2 = self.gpu_s2
     end
@@ -321,7 +317,11 @@ function trans:add(s, a, o, r, term, available_objects)
     end
 
     -- Overwrite (s,a,r,t) at insertIndex
-    self.s[self.insertIndex] = s:clone():float()
+    if torch.typename(s) == 'torch.ByteTensor' then
+        self.s[self.insertIndex] = s:clone()
+    else
+        self.s[self.insertIndex] = s:clone():float():byte()
+    end
     self.a[self.insertIndex] = a
     self.o[self.insertIndex] = o
     self.r[self.insertIndex] = r
@@ -341,7 +341,12 @@ end
 
 
 function trans:add_recent_state(s, term)
-    local s = s:clone():float():byte()
+    if torch.typename(s) == 'torch.ByteTensor' then
+        s = s:clone()
+    else
+        s = s:clone():float():byte()
+    end
+
     if #self.recent_s == 0 then
         for i=1,self.recentMemSize do
             table.insert(self.recent_s, s:clone():zero())
@@ -445,7 +450,7 @@ function trans:read(file)
     self.buf_s      = torch.ByteTensor(self.bufferSize, self.stateDim * self.histLen):fill(0)
     self.buf_s2     = torch.ByteTensor(self.bufferSize, self.stateDim * self.histLen):fill(0)
 
-    if self.gpu and self.gpu >= 0 then
+    if self.gpu == 1 then
         self.gpu_s  = self.buf_s:float():cuda()
         self.gpu_s2 = self.buf_s2:float():cuda()
     end

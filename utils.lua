@@ -1,7 +1,23 @@
+local _ = require 'underscore'
+
 local clock = os.clock
 function sleep(n)  -- seconds
   local t0 = clock()
   while clock() - t0 <= n do end
+end
+
+-- read in word vectors - one per line
+function readWordVecs(filename)
+    local file = io.open(filename, "r");
+    local data = {}
+    local parts
+    local wordVec = {} -- global
+    for line in file:lines() do
+        parts = line:split(" ")
+        wordVec[parts[1]] = _.rest(parts)
+    end
+
+    return wordVec
 end
 
 function split(s, pattern)
@@ -62,7 +78,6 @@ function str_to_table(str)
     local ttr
     if str ~= '' then
         local ttx=tt
-        print("str: " .. str)
         loadstring('tt = {' .. str .. '}')()
         ttr = tt
         tt = ttx

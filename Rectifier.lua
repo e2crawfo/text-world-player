@@ -1,4 +1,3 @@
-
 local Rectifier, parent = torch.class('nn.Rectifier', 'nn.Module')
 
 function Rectifier:updateOutput(input)
