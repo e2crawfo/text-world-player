@@ -289,7 +289,7 @@ local function test_ol()
     print("Passed :-).")
 end
 
-if false then
+if arg[1] == 'test' then
     test_bow()
     test_bob()
     test_ol()

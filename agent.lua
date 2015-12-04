@@ -154,6 +154,27 @@ else
 end
 
 
+-- Make the regressor
+regressor = opt.regressor
+regressor_network = nil
+
+n_actions = #(framework.getActions())
+n_objects = #(framework.getObjects())
+
+print(n_actions, n_objects, rep_dim, opt.gpu)
+
+if regressor == "shallow" then
+    print ("Using " .. regressor)
+    regressor_network = regression.make_shallow_regressor(rep_dim, n_actions, n_objects, opt.gpu)
+elseif regressor == "deep" then
+    print ("Using " .. regressor)
+    n_hid = 100
+    regressor_network = regression.make_deep_regressor(rep_dim, n_hid, n_actions, n_objects, opt.gpu)
+else
+    error("Invalid regressor `" .. regressor .. "` supplied.")
+end
+
+
 -- Make the representation
 rep = opt.representation
 rep_network = nil
@@ -170,8 +191,10 @@ elseif rep == "mvrnn" then
     r = 3
     nl_class = nn.Tanh
 
+    error("Set predictor, rep_predictor, rep_criterion, and words.")
     rep_network, rep_dim = mvrnn.make_mvrnn(
-         wv_dim, r, nl_class, mvrnn.CTS, mvrnn.MEAN, random_vec_func, wv_func)
+        wv_dim, r, words, nl_class, predictor, rep_predictor,
+        rep_criterion, mvrnn.MEAN, random_vec_func, wv_func, allow_new_words), n
 
 elseif rep == "lstm" or "rnn" then
 
@@ -197,27 +220,6 @@ elseif rep == "lstm" or "rnn" then
         :add(rep_network))
 else
     error("Invalid representation `" .. rep .. "` supplied.")
-end
-
-
--- Make the regressor
-regressor = opt.regressor
-regressor_network = nil
-
-n_actions = #(framework.getActions())
-n_objects = #(framework.getObjects())
-
-print(n_actions, n_objects, rep_dim, opt.gpu)
-
-if regressor == "shallow" then
-    print ("Using " .. regressor)
-    regressor_network = regression.make_shallow_regressor(rep_dim, n_actions, n_objects, opt.gpu)
-elseif regressor == "deep" then
-    print ("Using " .. regressor)
-    n_hid = 100
-    regressor_network = regression.make_deep_regressor(rep_dim, n_hid, n_actions, n_objects, opt.gpu)
-else
-    error("Invalid regressor `" .. regressor .. "` supplied.")
 end
 
 

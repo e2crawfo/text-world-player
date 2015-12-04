@@ -14,11 +14,28 @@ function BinaryParseTree:new (o)
 end
 
 
+function BinaryParseTree:get_subtrees ()
+    -- Returns a table mapping from subtrees to 1 - essentially a set.
+    local subtrees = {}
+
+    local function f (tree)
+        subtrees[tree] = 1
+        if not tree.terminal then
+            f(tree.left)
+            f(tree.right)
+        end
+    end
+
+    f(self)
+    return subtrees
+end
+
+
 function BinaryParseTree:get_words ()
     -- Returns a table mapping from words to 1 - essentially a set.
     local words = {}
 
-    function f (tree)
+    local function f (tree)
         if tree.terminal then
             words[tree.word] = 1
         else
@@ -32,20 +49,33 @@ function BinaryParseTree:get_words ()
 end
 
 
-function BinaryParseTree:get_subtrees ()
-    -- Returns a table mapping from subtrees to 1 - essentially a set.
-    local subtrees = {}
+function BinaryParseTree:get_text ()
+    local words = {}
 
-    function f (tree)
-        subtrees[tree] = 1
-        if not tree.terminal then
+    local function f (tree)
+        if tree.terminal then
+            words[#words + 1] = tree.word
+        else
             f(tree.left)
             f(tree.right)
         end
     end
 
     f(self)
-    return subtrees
+    return table.concat(words, ' ')
+end
+
+
+function BinaryParseTree:__tostring ()
+    local function f (tree)
+        if tree.terminal then
+            return string.format("(%s %s)", tree.label, tree.word)
+        else
+            return string.format("(%s %s %s)", tree.label, f(tree.left), f(tree.right))
+        end
+    end
+
+    return f(self)
 end
 
 

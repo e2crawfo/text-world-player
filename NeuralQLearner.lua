@@ -196,7 +196,7 @@ function nql:getQUpdate(args)
     q2[1] = q2_max:clone():mul(self.discount):cmul(term)
     q2[2] = q2_max:clone():mul(self.discount):cmul(term)
 
-
+    -- TD error
     delta = {r:clone():float(), r:clone():float()}
 
     delta[1]:add(q2[1])
@@ -209,6 +209,8 @@ function nql:getQUpdate(args)
     q_all[1] = q_all[1]:float()
     q_all[2] = q_all[2]:float()
 
+    -- For each batch element, we get the predicted q-value for the action/object
+    -- pair that was used in the batch element (Tensors a and o).
     q = {torch.FloatTensor(q_all[1]:size(1)), torch.FloatTensor(q_all[2]:size(1))}
     for i=1,q_all[1]:size(1) do
         q[1][i] = q_all[1][i][a[i]]
@@ -227,6 +229,8 @@ function nql:getQUpdate(args)
         delta[2][delta[2]:le(-self.clip_delta)] = -self.clip_delta
     end
 
+    -- For each batch element, store a vector that is all 0's, except
+    -- has the TD-error values for the action/object pair used in the batch-element.
     local targets = {torch.zeros(self.minibatch_size, self.n_actions):float(),
                     torch.zeros(self.minibatch_size, self.n_objects):float()}
     for i=1,math.min(self.minibatch_size,a:size(1)) do
@@ -237,7 +241,6 @@ function nql:getQUpdate(args)
     end
 
     if self.gpu == 1 then targets = targets:cuda() end
-
     return targets, delta, q2_max
 end
 
@@ -249,6 +252,8 @@ function nql:qLearnMinibatch()
     local priority_ratio = 0.25-- fraction of samples from 'priority' transitions
     local s, a, o, r, s2, term, available_objects = self.transitions:sample(self.minibatch_size, priority_ratio)
 
+    -- makes calls to forward for both the target network and the active network
+    -- ``targets`` is the error
     local targets, delta, q2_max = self:getQUpdate{s=s, a=a, o=o, r=r, s2=s2,
         term=term, update_qmax=true, available_objects=available_objects}
 
