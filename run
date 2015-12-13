@@ -1,21 +1,24 @@
 #!/bin/bash
 
-#Usage : ./run_cpu <game_num>
+#Usage : ./run_cpu <game_num> <step_size> <rep> <regressor> <name> <r> <combine_mode> <dimensions> <max_repr_train>
 #game_num is 1, 2, 3 ...
 #----------------------------------
 
-#specify the output folder for logging stats and graphs
-exp_folder="logs/run1/"
-
-mkdir -p $exp_folder;
-
-STEP_SIZE=100 #step size for learn_start, eval, saving, etc.
+STEP_SIZE=$2 #Number of training and testing steps each epoch
 hist_len=1 #Number of previous states to consider
 max_steps=20 #max steps  in a single episode
 minibatch_size=64 #batch size of transitions used in updates
 quest_levels=1
 game_num=$1
 n_replay=1
+
+steps=50000
+eval_freq=$STEP_SIZE
+eval_steps=$STEP_SIZE
+prog_freq=$STEP_SIZE
+save_freq=$STEP_SIZE
+gpu=-1
+num_threads=1
 
 #Set this to 1 if playing the Fantasy world
 tutorial_world=0
@@ -25,8 +28,13 @@ text_world_location="../text-world/"
 random_test=0
 analyze_test=0
 
-representation="bow"
-regressor="deep"
+representation=$3
+regressor=$4
+
+r=$6
+combine_mode=$7
+dimensions=$8
+max_repr_train=$9
 
 # You can also start by loading a model from a previous run
 # netfile="\"logs/run1\""
@@ -36,28 +44,29 @@ update_freq=4
 actrep=1
 discount=0.5
 seed=1
-learn_start=50
+learn_start=$STEP_SIZE
 initial_priority="false"
 replay_memory=100000
-eps=0.05
+eps=1
 eps_end=0.2
-eps_endt=200000
+eps_endt=50000
 lr=0.0005
 
-agent_type=$exp_folder"DQN"
+name=$5"_"$representation"_"$regressor
+
+#specify the output folder for logging stats and graphs
+#exp_folder="/home/eric/data/comp599/logs/"$name
+exp_folder="/media/eric/snorlax/data/comp599_project/logs/"$name
+
+mkdir -p $exp_folder;
+
+agent_type=$exp_folder"/DQN"
 agent_name=$agent_type
 recurrent_dim=100
 ncols=1
 agent_params="lr="$lr",ep="$eps",ep_end="$eps_end",ep_endt="$eps_endt",discount="$discount",hist_len="$hist_len",learn_start="$learn_start",replay_memory="$replay_memory",update_freq="$update_freq",n_replay="$n_replay",minibatch_size="$minibatch_size",rescale_r=1,ncols="$ncols",bufferSize=512,valid_size=500,target_q="$STEP_SIZE",clip_delta=1,min_reward=-1,max_reward=10"
-steps=1000
-eval_freq=$STEP_SIZE
-eval_steps=$STEP_SIZE
-prog_freq=$STEP_SIZE
-save_freq=$STEP_SIZE
-gpu=-1
-num_threads=1
 
-args="-representation $representation -regressor $regressor -name $agent_name -agent_params $agent_params -steps $steps -eval_freq $eval_freq -eval_steps $eval_steps -prog_freq $prog_freq -save_freq $save_freq -actrep $actrep -gpu $gpu -seed $seed -threads $num_threads"
+args="-representation $representation -r $r -max_repr_train $max_repr_train -dimensions $dimensions -combine_mode $combine_mode -regressor $regressor -name $agent_name -agent_params $agent_params -steps $steps -eval_freq $eval_freq -eval_steps $eval_steps -prog_freq $prog_freq -save_freq $save_freq -actrep $actrep -gpu $gpu -seed $seed -threads $num_threads"
 echo $args
 
 th agent.lua $args -saveNetworkParams -exp_folder $exp_folder  -game_num $game_num -quest_levels $quest_levels -recurrent_dim  $recurrent_dim -max_steps $max_steps -tutorial_world $tutorial_world -random_test $random_test -analyze_test $analyze_test -text_world_location $text_world_location;

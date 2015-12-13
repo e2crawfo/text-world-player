@@ -86,19 +86,22 @@ function nql:__init(args)
     --     self.network = self:network()
     -- end
 
-    if self.gpu == 1 then
-        self.network:cuda()
-    else
-        self.network:float()
-    end
+    -- TODO: Do something smarter here.
+    -- if self.gpu == 1 then
+    --     self.network:cuda()
+    -- else
+    --     self.network:float()
+    -- end
 
-    if self.gpu == 1 then
-        self.network:cuda()
-        self.tensor_type = torch.CudaTensor
-    else
-        self.network:float()
-        self.tensor_type = torch.FloatTensor
-    end
+    -- if self.gpu == 1 then
+    --     self.network:cuda()
+    --     self.tensor_type = torch.CudaTensor
+    -- else
+    --     self.network:float()
+    --     self.tensor_type = torch.FloatTensor
+    -- end
+    --
+    self.tensor_type = torch.FloatTensor
 
     -- Create transition table.
     ---- assuming the transition table always gets floating point input
@@ -170,7 +173,7 @@ function nql:getQUpdate(args)
     -- to avoid unnecessary calls (we only need 2).
 
     -- delta = r + (1-terminal) * gamma * max_a Q(s2, a) - Q(s, a)
-    term = term:clone():float():mul(-1):add(1)
+    term = term:clone():typeAs(self.tensor_type()):mul(-1):add(1)
 
     local target_q_net
     if self.target_q then
@@ -182,94 +185,89 @@ function nql:getQUpdate(args)
     -- Compute {max_a Q(s_2, a), max_o Q(s_2, o)}.
     q2_max = target_q_net:forward(s2)
 
-    q2_max[1] = q2_max[1]:float():max(2) --actions
-    q2_max[2] = q2_max[2]:float() -- objects
+    q2_max_action = q2_max[{{}, {1, self.n_actions}}]:max(2)
 
-    q2_max[2]:cmul(available_objects:float())
-    q2_max[2][q2_max[2]:eq(0)] = -1e30
-    q2_max[2] = q2_max[2]:max(2)
+    q2_max_object = q2_max[{{}, {self.n_actions+1, self.n_actions+self.n_objects}}]
+    q2_max_object:cmul(available_objects)
+    q2_max_object[q2_max_object:eq(0)] = -1e30
+    q2_max_object = q2_max_object:max(2)
 
-    q2_max = (q2_max[1]+q2_max[2])/2 --take avg. of action and object
+    q2_max = (q2_max_action + q2_max_object) / 2 --take avg. of action and object
 
     -- Compute q2 = (1-terminal) * gamma * max_a Q(s2, a)
-    q2 = {}
-    q2[1] = q2_max:clone():mul(self.discount):cmul(term)
-    q2[2] = q2_max:clone():mul(self.discount):cmul(term)
+    q2 = q2_max:clone():mul(self.discount):cmul(term)
 
-    -- TD error
-    delta = {r:clone():float(), r:clone():float()}
-
-    delta[1]:add(q2[1])
-    delta[2]:add(q2[2])
+    local target = q2:clone():add(r)
 
     -- q = Q(s,a)
-    local q_all
-    q_all = self.network:forward(s)
+    local q_all = self.network:forward(s)
 
-    q_all[1] = q_all[1]:float()
-    q_all[2] = q_all[2]:float()
-
-    -- For each batch element, we get the predicted q-value for the action/object
-    -- pair that was used in the batch element (Tensors a and o).
-    q = {torch.FloatTensor(q_all[1]:size(1)), torch.FloatTensor(q_all[2]:size(1))}
-    for i=1,q_all[1]:size(1) do
-        q[1][i] = q_all[1][i][a[i]]
-    end
-    for i=1,q_all[2]:size(1) do
-        q[2][i] = q_all[2][i][o[i]]
-    end
-
-    delta[1]:add(-1, q[1])
-    delta[2]:add(-1, q[2])
-
-    if self.clip_delta then
-        delta[1][delta[1]:ge(self.clip_delta)] = self.clip_delta
-        delta[1][delta[1]:le(-self.clip_delta)] = -self.clip_delta
-        delta[2][delta[2]:ge(self.clip_delta)] = self.clip_delta
-        delta[2][delta[2]:le(-self.clip_delta)] = -self.clip_delta
-    end
+    a = a:reshape(a:nElement(), 1)
+    o = o:reshape(o:nElement(), 1):add(self.n_actions)
 
     -- For each batch element, store a vector that is all 0's, except
     -- has the TD-error values for the action/object pair used in the batch-element.
-    local targets = {torch.zeros(self.minibatch_size, self.n_actions):float(),
-                    torch.zeros(self.minibatch_size, self.n_objects):float()}
-    for i=1,math.min(self.minibatch_size,a:size(1)) do
-        targets[1][i][a[i]] = delta[1][i]
-    end
-    for i=1,math.min(self.minibatch_size,o:size(1)) do
-        targets[2][i][o[i]] = delta[2][i]
+    local err = torch.zeros(target:size(1), self.n_actions + self.n_objects)
+    err:scatter(2, a, target - q_all:gather(2, a))
+    err:scatter(2, o, target - q_all:gather(2, o))
+
+    target = target:repeatTensor(1, self.n_actions + self.n_objects)
+
+    if self.clip_delta then
+        err[err:ge(self.clip_delta)] = self.clip_delta
+        err[err:le(-self.clip_delta)] = -self.clip_delta
     end
 
-    if self.gpu == 1 then targets = targets:cuda() end
-    return targets, delta, q2_max
+    if self.gpu == 1 then err = err:cuda() end
+    return target, err, q2_max
 end
 
 
 function nql:qLearnMinibatch()
+    stime = os.time()
+
     -- Perform a minibatch Q-learning update:
     -- w += alpha * (r + gamma max Q(s2,a2) - Q(s,a)) * dQ(s,a)/dw
 
-    local priority_ratio = 0.25-- fraction of samples from 'priority' transitions
+    local priority_ratio = 0.25 -- fraction of samples from 'priority' transitions
     local s, a, o, r, s2, term, available_objects = self.transitions:sample(self.minibatch_size, priority_ratio)
 
+    stime2 = os.time()
     -- makes calls to forward for both the target network and the active network
-    -- ``targets`` is the error
-    local targets, delta, q2_max = self:getQUpdate{s=s, a=a, o=o, r=r, s2=s2,
+    -- Error is the error. Its 0 for actions and objects other than the current action/object.
+    local target, err, q2_max = self:getQUpdate{s=s, a=a, o=o, r=r, s2=s2,
         term=term, update_qmax=true, available_objects=available_objects}
+    etime2 = os.time()
+    print("Time for getQUpdate: " .. etime2 - stime2 .. " seconds.")
 
     -- zero gradients of parameters
     self.dw:zero()
 
-    -- get new gradient
-    self.network:backward(s, targets)
+    if torch.type(self.network) == 'MVRNN' and self.network.train_repr then
+        stime3 = os.time()
+        mask = torch.zeros(s:size(1), self.n_actions + self.n_objects)
 
+        mask:scatter(2, a:view(a:nElement(), 1), 1.0)
+        mask:scatter(2, o:add(self.n_actions):view(o:nElement(), 1), 1.0)
+
+        self.network:accGradReprParameters(s, target, mask)
+        etime3 = os.time()
+        print("Time for Repr Gradient: " .. etime3 - stime3 .. " seconds.")
+    end
+
+    -- get new gradient
+    stime4 = os.time()
+    self.network:backward(s, err)
+    etime4 = os.time()
+    print("Time for Predictor Gradient: " .. etime4 - stime4 .. " seconds.")
+
+    stime1 = os.time()
     -- add weight cost to gradient
     self.dw:add(-self.wc, self.w)
 
     -- compute linearly annealed learning rate
     local t = math.max(0, self.numSteps - self.learn_start)
-    self.lr = (self.lr_start - self.lr_end) * (self.lr_endt - t)/self.lr_endt +
-                self.lr_end
+    self.lr = (self.lr_start - self.lr_end) * (self.lr_endt - t)/self.lr_endt + self.lr_end
     self.lr = math.max(self.lr, self.lr_end)
 
     --grad normalization
@@ -293,12 +291,13 @@ function nql:qLearnMinibatch()
     -- self.tmp:add(0.01)
     -- self.tmp:sqrt()
 
-    --rmsprop
     local smoothing_value = 1e-8
     self.tmp:cmul(self.dw, self.dw)
     self.g:mul(0.9):add(0.1, self.tmp)
     self.tmp = torch.sqrt(self.g)
     self.tmp:add(smoothing_value)  --negative learning rate
+    etime1 = os.time()
+    print("Time for Gradient Update: " .. etime1 - stime1 .. " seconds.")
 
     --AdaGrad
     -- self.tmp:cmul(self.dw, self.dw)
@@ -324,6 +323,9 @@ function nql:qLearnMinibatch()
     -- print("Embedding grad weight:",EMBEDDING.gradWeight:norm())
     -- print("Embedding2:",EMBEDDING:forward(torch.range(1, #symbols+1)):norm())
     -- assert(EMBEDDING.gradWeight:norm() > 0)
+    etime = os.time()
+
+    print("Time for minibatch: " .. etime - stime .. " seconds.")
 end
 
 
@@ -340,12 +342,17 @@ end
 
 
 function nql:compute_validation_statistics()
-    local targets, delta, q2_max = self:getQUpdate{s=self.valid_s,
+    local target, err, q2_max = self:getQUpdate{s=self.valid_s,
         a=self.valid_a, o = self.valid_o, r=self.valid_r, s2=self.valid_s2,
         term=self.valid_term, available_objects=self.valid_available_objects}
 
-    self.v_avg = self.q_max * (q2_max[1]:mean() + q2_max[2]:mean())/2
-    self.tderr_avg = (delta[1]:clone():abs():mean() + delta[2]:clone():abs():mean())/2
+    self.v_avg = self.q_max * q2_max:mean()
+
+    self.tderr_avg = 0
+    for i=1,err:size(1) do
+        self.tderr_avg = self.tderr_avg + (err[i][self.valid_a[i]] + err[i][self.valid_o[i]]) / 2
+    end
+    self.tderr_avg = self.tderr_avg / err:size(1)
 end
 
 
@@ -410,7 +417,13 @@ function nql:perceive(reward, state, terminal, testing, testing_ep, available_ob
     self.lastAvailableObjects = available_objects
 
     if self.target_q and self.numSteps % self.target_q == 1 then
-        self.target_network = self.network:clone()
+        if torch.type(self.network) == 'MVRNN' or torch.type(self.network) == 'RecNN' then
+            self.target_network = self.network:clone_all()
+        else
+            self.target_network = self.network:clone()
+        end
+
+        collectgarbage()
     end
 
     if not terminal then
@@ -425,19 +438,16 @@ function nql:eGreedy(state, testing_ep, available_objects)
     self.ep = testing_ep or (self.ep_end +
                 math.max(0, (self.ep_start - self.ep_end) * (self.ep_endt -
                 math.max(0, self.numSteps - self.learn_start))/self.ep_endt))
-
-    print("Using epsilon: ", self.ep)
+    print("Using Epsilon: " .. self.ep)
 
     -- Epsilon greedy
     if torch.uniform() < self.ep then
-        print("Being random")
         if not available_objects then
             return torch.random(1, self.n_actions), torch.random(1, self.n_objects)
         else
             return torch.random(1, self.n_actions), available_objects[math.random(#available_objects)]
         end
     else
-        print("Being greedy")
         return self:greedy(state, available_objects)
     end
 end
@@ -446,7 +456,6 @@ end
 -- Evaluate all actions (with random tie-breaking)
 function nql:getBestRandom(q, N, available_objects)
     if available_objects then
-        -- print("avail OBJECTSSSS",available_objects)
         local maxq = q[available_objects[1]]
         local besta = {available_objects[1]}
         for i=2, #available_objects do
@@ -459,7 +468,6 @@ function nql:getBestRandom(q, N, available_objects)
             end
         end
         local r = torch.random(1, #besta)
-        -- print("best object:", besta[r], maxq, q)
         return besta[r], maxq
     end
 
@@ -483,26 +491,31 @@ end
 
 
 function nql:greedy(state, available_objects)
+    -- Doesn't work in batches
     if self.gpu == 1 then
         state = state:cuda()
     end
 
     q = self.network:forward(state)
-
-    q[1] = q[1]:float():squeeze()
-    q[2] = q[2]:float():squeeze()
+    q = q:float():squeeze()
 
     local best = {}
     local maxq = {}
-    best[1], maxq[1] = self:getBestRandom(q[1], self.n_actions)
-    best[2], maxq[2] = self:getBestRandom(q[2], self.n_objects, available_objects)
+
+    local action_q = q[{{1, self.n_actions}}]
+    local object_q = q[{{self.n_actions+1, q:nElement()}}]
+
+    best[1], maxq[1] = self:getBestRandom(action_q, self.n_actions)
+    best[2], maxq[2] = self:getBestRandom(object_q, self.n_objects, available_objects)
 
     self.lastAction = best[1]
     self.lastObject = best[2]
     self.bestq = (maxq[1] + maxq[2])/2
 
-    local avail_obj_tensor = table_to_binary_tensor(available_objects, self.n_objects):float()
-    q[2] = q[2]:clone():cmul(avail_obj_tensor)
+    if available_objects then
+        q = q:clone()
+        q[{{self.n_actions+1, q:nElement()}}]:cmul(available_objects)
+    end
 
     return best[1], best[2], q
 end
@@ -528,6 +541,9 @@ end
 
 
 function nql:report()
-    print(get_weight_norms(self.network))
-    print(get_grad_norms(self.network))
+    print("Weight mean:\n" .. torch.mean(torch.abs(self.w)))
+    print("Weight max:\n" .. torch.abs(self.w):max())
+
+    print("Weight grad mean:\n" .. torch.mean(torch.abs(self.dw)))
+    print("Weight grad max:\n" .. torch.abs(self.dw):max())
 end

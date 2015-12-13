@@ -7,7 +7,7 @@ do
 
     function Text2Vector:__init(dimension, use_cache)
         self.cache = use_cache and {}
-        self.output = torch.Tensor()-- :float()
+        self.output = torch.Tensor()
         self.dimension = dimension
     end
 
@@ -38,7 +38,7 @@ do
         else
             self:fillVector(text, loc[row])
             if self.cache then
-                self.cache[text] = loc[row]:clone()
+                self.cache[text] = loc[row]:view(1, self.dimension):clone()
             end
         end
     end
@@ -199,6 +199,28 @@ local function make_ordered_list(symbols, symbol_mapping, dimension)
     return ol, ol.dimension
 end
 
+
+do
+    local RandomVector, _ = torch.class('RandomVector', 'Text2Vector')
+
+    function RandomVector:__init(rv_func, dimension)
+        local use_cache = true
+        Text2Vector.__init(self, dimension, use_cache)
+
+        self.rv_func = rv_func
+    end
+
+    function RandomVector:fillVector(text, vector)
+        vector:copy(self.rv_func(self.dimension))
+    end
+end
+
+local function make_random(rv_func, dimension)
+    local rv = RandomVector(rv_func, dimension)
+    return rv, rv.dimension
+end
+
+
 local function test_bow()
     print("Testing BoW...")
 
@@ -289,10 +311,42 @@ local function test_ol()
     print("Passed :-).")
 end
 
+local function test_random_vector()
+    print("Testing RandomVector...")
+
+    local random_vec_func = (
+        function (size)
+            return torch.rand(size) - 0.5
+        end
+    )
+
+    dimension = 10
+    b, s = make_random(random_vec_func, dimension)
+    assert(b:forward("b"):eq(b:forward("b"):clone()):all())
+    assert(not b:forward("b"):clone():eq(b:forward("b c"):clone()):all())
+
+    -- Batch mode
+    b:forward{"c b a", "a, b, b, c"}
+
+    -- Part of a network
+    seq = (
+        nn.Sequential()
+        :add(b)
+        :add(nn.Linear(s, 1)))
+
+    seq:forward("a b")
+    seq:backward("a b", torch.Tensor{1})
+
+    seq:forward{"a b", "b c"}
+    seq:backward({"a b", "b c"}, torch.Tensor{{1}, {1}})
+    print("Passed :-).")
+end
+
 if arg[1] == 'test' then
     test_bow()
     test_bob()
     test_ol()
+    test_random_vector()
 end
 
 text_to_vector = {
@@ -305,7 +359,10 @@ text_to_vector = {
     make_bob=make_bob,
 
     OrderedList=OrderedList,
-    make_ordered_list=make_ordered_list
+    make_ordered_list=make_ordered_list,
+
+    RandomVector=RandomVector,
+    make_random=make_random
 }
 
 return text_to_vector

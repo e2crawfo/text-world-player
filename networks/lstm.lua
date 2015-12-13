@@ -53,8 +53,8 @@ function LSTM:updateOutput(input)
       prevOutput = self.zeroTensor
       prevCell = self.zeroTensor
 
-      -- since we have batches of symbols, we need to do this explicitly
-      self.zeroTensor:resize(input:size(1), self.outputSize):zero()
+      batch_size = type(input) == 'number' and 1 or input:size(1)
+      self.zeroTensor:resize(batch_size, self.outputSize):zero()
 
       self.outputs[0] = self.zeroTensor
       self.cells[0] = self.zeroTensor
@@ -62,6 +62,10 @@ function LSTM:updateOutput(input)
       -- previous output and cell of this module
       prevOutput = self.output
       prevCell = self.cell
+   end
+
+   if(type(input) == 'number') then
+       input = torch.Tensor{input}
    end
 
    -- output(t), cell(t) = lstm{input(t), output(t-1), cell(t-1)}
@@ -89,9 +93,23 @@ function LSTM:updateOutput(input)
    self.cell = cell
 
    self.step = self.step + 1
+   self.gradPrevOutput = nil
+   self.updateGradInputStep = nil
+   self.accGradParametersStep = nil
    self.gradParametersAccumulated = false
    -- note that we don't return the cell, just the output
    return self.output
+end
+
+
+do
+    local NoBackwardSplitTable = torch.class('NBSplitTable', 'nn.SplitTable')
+
+    -- Do this because LSTM backward does not work properly.
+    function NBSplitTable:updateGradInput(input, gradOutput)
+        self.gradInput:resizeAs(input):zero()
+        return self.gradInput
+    end
 end
 
 
@@ -99,34 +117,22 @@ local function make_lstm(hist_len, gpu)
     n_hid = EMBEDDING.weight:size(2)
     local l  = LSTM(n_hid, n_hid)
 
-    local lstm_seq = nn.Sequential()
-    lstm_seq:add(nn.Sequencer(l))
+    local lstm = nn.Sequential()
+    lstm:add(NBSplitTable(1, 1))
+    lstm:add(nn.Sequencer(l))
 
     -- Mean pooling
-    lstm_seq:add(nn.CAddTable())
-    lstm_seq:add(nn.Linear(n_hid, n_hid))
-    lstm_seq:add(nn.Rectifier())
+    lstm:add(nn.CAddTable())
+    lstm:add(nn.Linear(n_hid, n_hid))
+    lstm:add(nn.Rectifier())
 
-    LSTM_MODEL = lstm_seq
-
-    local parallel_flows = nn.ParallelTable()
-    for f=1, hist_len do
-        if f > 1 then
-            parallel_flows:add(lstm_seq:clone("weight","bias","gradWeight", "gradBias"))
-        else
-            parallel_flows:add(lstm_seq) -- TODO share 'weight' and 'bias'
-        end
-    end
-
-    local lstm = nn.Sequential()
-    lstm:add(parallel_flows)
-    lstm:add(nn.JoinTable(2))
+    LSTM_MODEL = lstm
 
     if gpu == 1 then
         lstm:cuda()
     end
 
-    return lstm, n_hid * args.hist_len
+    return lstm, n_hid * hist_len
 end
 
 lstm = {

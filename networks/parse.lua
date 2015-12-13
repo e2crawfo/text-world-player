@@ -134,9 +134,10 @@ local function parse_sentences (sentences)
 
     sentences = map(sentences, surround)
     local args = table.concat(sentences, " ")
+    local parse_script = "/home/eric/Dropbox/classes/comp599/project/text-world-player/networks/parse.py"
 
     -- Parse sentences by calling out to parse.py
-    local handle = io.popen("python parse.py " .. args)
+    local handle = io.popen("python " .. parse_script .. " " .. args)
 
     local new_sentences = {}
     local parses = {}

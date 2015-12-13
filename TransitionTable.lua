@@ -131,7 +131,14 @@ function trans:sample_one(priority)
     assert(self.numEntries > 1)
     local index = nil
     local valid = false
+    local num_tries = 0
+    local MAX_TRIES = 10000
     while not valid do
+        if priority and num_tries > MAX_TRIES then
+            print("FAILED TO FIND PRIORITY SAMPLE")
+            priority = false
+        end
+
         -- start at 2 because of previous action
         if priority and #self.priority_indices > 0 then
             while not index or index > self.numEntries-self.recentMemSize do
@@ -158,6 +165,8 @@ function trans:sample_one(priority)
             -- probability (1-nonTermProb).
             valid = false
         end
+
+        num_tries = num_tries + 1
     end
 
     return self:get(index)

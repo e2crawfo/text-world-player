@@ -7,17 +7,14 @@ require 'nn'
 local function make_deep_regressor (n_input, n_hid, n_actions, n_objects, gpu)
 
     local mlp = nn.Sequential()
+
     mlp:add(nn.Reshape(n_input))
     mlp:add(nn.Linear(n_input, n_hid))
     mlp:add(nn.Rectifier())
     mlp:add(nn.Linear(n_hid, n_hid))
     mlp:add(nn.Rectifier())
 
-    local mlp_out = nn.ConcatTable()
-    mlp_out:add(nn.Linear(n_hid, n_actions))
-    mlp_out:add(nn.Linear(n_hid, n_objects))
-
-    mlp:add(mlp_out)
+    mlp:add(nn.Linear(n_hid, n_actions + n_objects))
 
     if gpu == 1 then
         mlp:cuda()
@@ -30,13 +27,9 @@ end
 local function make_shallow_regressor (n_input, n_actions, n_objects, gpu)
 
     local mlp = nn.Sequential()
+
     mlp:add(nn.Reshape(n_input))
-
-    local mlp_out = nn.ConcatTable()
-    mlp_out:add(nn.Linear(n_input, n_actions))
-    mlp_out:add(nn.Linear(n_input, n_objects))
-
-    mlp:add(mlp_out)
+    mlp:add(nn.Linear(n_input, n_actions + n_objects))
 
     if gpu == 1 then
         mlp:cuda()

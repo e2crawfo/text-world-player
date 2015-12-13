@@ -1,6 +1,7 @@
 -- agent
 require 'torch'
 package.path = package.path .. ';networks/?.lua'
+torch.setdefaulttensortype('torch.FloatTensor')
 
 local cmd = torch.CmdLine()
 cmd:text()
@@ -15,6 +16,10 @@ cmd:option('-actrep', 1, 'how many times to repeat action')
 
 cmd:option('-representation', '', 'The type of representation to use. Can be "bow", "bob", "mvrnn", "rnn", or "lstm".')
 cmd:option('-regressor', '', 'The type of regressor to use. Can be "deep" or "shallow".')
+cmd:option('-dimensions', 20, 'Number of dimensions for word-vectors.')
+cmd:option('-combine_mode', 'prod', 'Method for comining sentence vectors.')
+cmd:option('-max_repr_train', 0, 'Maximum representations to sample during training.')
+cmd:option('-r', 3, 'Rank for MVRNN')
 
 cmd:option('-name', '', 'filename used for saving network and training history')
 cmd:option('-network', '', 'reload pretrained network')
@@ -61,6 +66,7 @@ WORDVEC_FILE = opt.wordvec_file
 TUTORIAL_WORLD = (opt.tutorial_world==1)
 RANDOM_TEST = (opt.random_test==1)
 ANALYZE_TEST = (opt.analyze_test==1)
+GC_FREQ=50
 
 print("Using Tutorial world?", TUTORIAL_WORLD)
 
@@ -82,17 +88,18 @@ if not dqn then
     dqn = {}
     require 'nn'
     require 'nngraph'
-    require 'nnutils'
     require 'NeuralQLearner'
     require 'TransitionTable'
     require 'Rectifier'
     require 'Embedding'
 
-    require 'networks/rnn'
+    -- require 'networks/rnn'
     require 'networks/lstm'
-    require 'networks/mvrnn'
-    require 'networks/text_to_vector.lua'
-    require 'networks/regression.lua'
+    -- require 'networks/mvrnn'
+    require 'networks/sentence_vectors'
+    require 'networks/recursive_nn'
+    -- require 'networks/text_to_vector'
+    require 'networks/regression'
 end
 
 -- Need to do it here so that the earlier requires don't overwrite _
@@ -112,7 +119,7 @@ end
 
 print (opt.agent_params)
 
-state_dim = framework.getStateDim()
+local state_dim = framework.getStateDim()
 
 
 -- General setup.
@@ -129,17 +136,16 @@ if opt.agent_params then
 end
 
 
-wv_dim = 20
-random_vec_func = (
+local wv_dim = opt.dimensions
+local random_vec_func = (
     function (size)
         return torch.rand(size)*0.02-0.01
     end
 )
-wv_init = opt.use_wordvec == 1 and readWordVec(WORDVEC_FILE) or nil
-wv_func = nil
+local wv_init = opt.use_wordvec == 1 and readWordVec(WORDVEC_FILE) or nil
+local wv_func = nil
 
 if wv_init then
-
     function make_wv_func (wv_init)
         local function f (size, word)
             return torch.Tensor(size):copy(wv_init[word])
@@ -154,81 +160,158 @@ else
 end
 
 
--- Make the regressor
-regressor = opt.regressor
-regressor_network = nil
+local rep = opt.representation
+local rep_network = nil
+local rep_dim = nil
 
-n_actions = #(framework.getActions())
-n_objects = #(framework.getObjects())
+local regressor = opt.regressor
+local regressor_network = nil
 
-print(n_actions, n_objects, rep_dim, opt.gpu)
+local save_network = nil
 
-if regressor == "shallow" then
-    print ("Using " .. regressor)
-    regressor_network = regression.make_shallow_regressor(rep_dim, n_actions, n_objects, opt.gpu)
-elseif regressor == "deep" then
-    print ("Using " .. regressor)
-    n_hid = 100
-    regressor_network = regression.make_deep_regressor(rep_dim, n_hid, n_actions, n_objects, opt.gpu)
-else
-    error("Invalid regressor `" .. regressor .. "` supplied.")
-end
+local n_actions = #(framework.getActions())
+local n_objects = #(framework.getObjects())
 
+local all_text = table.concat(framework.getAllStates(), ' ')
 
--- Make the representation
-rep = opt.representation
-rep_network = nil
-rep_dim = nil
-
-if rep == "bow" then
-    print ("Using " .. rep)
-    rep_network, rep_dim = text_to_vector.make_bow(symbols, symbol_mapping)
-elseif rep == "bob" then
-    print ("Using " .. rep)
-    rep_network, rep_dim = text_to_vector.make_bob(symbols, symbol_mapping)
-elseif rep == "mvrnn" then
-    print ("Using " .. rep)
-    r = 3
-    nl_class = nn.Tanh
-
-    error("Set predictor, rep_predictor, rep_criterion, and words.")
-    rep_network, rep_dim = mvrnn.make_mvrnn(
-        wv_dim, r, words, nl_class, predictor, rep_predictor,
-        rep_criterion, mvrnn.MEAN, random_vec_func, wv_func, allow_new_words), n
-
-elseif rep == "lstm" or "rnn" then
-
-    recurrent_dim = opt.recurrent_dim
-    ol_network, ol_dim = text_to_vector.make_ordered_list(symbols, symbol_mapping, recurrent_dim)
-
-    -- Need to set this global variable before creating LSTM or RNN
-    EMBEDDING = Embedding(#symbols+1, wv_dim)
-    EMBEDDING:setWordVecs(symbols, wv_func)
-
-    if rep == "lstm" then
-        print ("Using " .. rep)
-        rep_network, rep_dim = lstm.make_lstm(opt.agent_params.hist_len, opt.gpu)
+if rep == "mvrnn" or rep == "recnn" then
+    if regressor == "shallow" then
+        regressor_network = regression.make_shallow_regressor(wv_dim, n_actions, n_objects, opt.gpu)
+    elseif regressor == "deep" then
+        local n_hid = 100
+        regressor_network = regression.make_deep_regressor(wv_dim, n_hid, n_actions, n_objects, opt.gpu)
     else
-        print ("Using " .. rep)
-        rep_network, rep_dim = rnn.make_rnn(
-            recurrent_dim, opt.agent_params.hist_len, opt.gpu)
+        error("Invalid regressor `" .. regressor .. "` supplied.")
     end
 
-    rep_network = (
-        nn.Sequential()
-        :add(ol_network)
-        :add(rep_network))
+    -- Get all words.
+    local all_words = mvrnn.get_all_words(all_text)
+
+    local non_linearity = nn.Tanh()
+    local combine_mode = opt.combine_mode
+    local allow_new_words = false
+
+    local max_repr_train = opt.max_repr_train
+
+    -- If max_repr_train == 0, these are not used.
+    local rep_predictor = regressor_network:clone()
+    local rep_criterion = nn.MSECriterion()
+
+    local wv_func = function (size) return torch.Tensor(size):normal(0, 1.0) end
+
+    if rep == "mvrnn" then
+        print ("Using " .. opt.regressor .. " with MVRNN.")
+
+        local r = opt.r
+
+        local mat_func = function (size) return torch.Tensor(size):normal(0, 0.3) end
+        local a_func = function (size) return torch.Tensor(size):normal(1, 0.05) end
+
+        opt.agent_params.network, rep_dim = mvrnn.make_mvrnn(
+            wv_dim, r, all_words, non_linearity, regressor_network, rep_predictor,
+            rep_criterion, combine_mode, mat_func, a_func, wv_func, allow_new_words,
+            max_repr_train)
+
+        -- A compact version of the network for saving only the things that need to be saved
+        save_network = opt.agent_params.network:clone()
+
+        save_network.U = opt.agent_params.network.U
+        save_network.V = opt.agent_params.network.V
+        save_network.A = opt.agent_params.network.A
+        save_network.word_vecs = opt.agent_params.network.word_vecs
+
+        save_network.U_shape = opt.agent_params.network.U_shape
+        save_network.V_shape = opt.agent_params.network.V_shape
+        save_network.w_shape = opt.agent_params.network.w_shape
+        save_network.a_shape = opt.agent_params.network.a_shape
+
+        save_network.W = opt.agent_params.network.W
+        save_network.WM = opt.agent_params.network.WM
+
+        save_network.predictor = opt.agent_params.network.predictor
+        save_network.repr_predictor = opt.agent_params.network.repr_predictor
+        save_network.repr_criterion = opt.agent_params.network.repr_criterion
+
+    elseif rep == "recnn" then
+        print ("Using " .. opt.regressor .. " with RecNN.")
+
+        opt.agent_params.network, rep_dim = recursive_nn.make_recnn(
+            wv_dim, all_words, non_linearity, regressor_network, rep_predictor,
+            rep_criterion, combine_mode, wv_func, allow_new_words, max_repr_train)
+
+        -- A compact version of the network for saving only the things that need to be saved
+        save_network = opt.agent_params.network:clone()
+
+        save_network.word_vecs = opt.agent_params.network.word_vecs
+        save_network.w_shape = opt.agent_params.network.w_shape
+        save_network.W = opt.agent_params.network.W
+
+        save_network.predictor = opt.agent_params.network.predictor
+        save_network.repr_predictor = opt.agent_params.network.repr_predictor
+        save_network.repr_criterion = opt.agent_params.network.repr_criterion
+    else
+        error("Unrecognized representation: " .. rep)
+    end
+
 else
-    error("Invalid representation `" .. rep .. "` supplied.")
+    print ("Using representation: " .. rep .. ".")
+
+    local rv_func = (
+
+        function (size)
+            return torch.rand(size) - 0.5
+        end
+    )
+
+    if rep == "random" then
+        rep_network, rep_dim = text_to_vector.make_random(rv_func, wv_dim)
+    elseif rep == "sentence" then
+        rep_network, rep_dim = sentence_vectors.make_rvps(
+            all_text, opt.combine_mode, rv_func, wv_dim, true, false)
+    elseif rep == "bow" then
+        rep_network, rep_dim = text_to_vector.make_bow(symbols, symbol_mapping)
+    elseif rep == "bob" then
+        rep_network, rep_dim = text_to_vector.make_bob(symbols, symbol_mapping)
+    elseif rep == "lstm" or "rnn" then
+        recurrent_dim = opt.recurrent_dim
+        ol_network, ol_dim = text_to_vector.make_ordered_list(symbols, symbol_mapping, recurrent_dim)
+
+        -- Need to set this global variable before creating LSTM or RNN
+        EMBEDDING = Embedding(#symbols+1, wv_dim)
+        EMBEDDING:setWordVecs(symbols, wv_func)
+
+        if rep == "lstm" then
+            rep_network, rep_dim = lstm.make_lstm(opt.agent_params.hist_len, opt.gpu)
+        else
+            rep_network, rep_dim = rnn.make_rnn(
+                recurrent_dim, opt.agent_params.hist_len, opt.gpu)
+        end
+
+        rep_network = (
+            nn.Sequential()
+            :add(ol_network)
+            :add(rep_network))
+    else
+        error("Invalid representation `" .. rep .. "` supplied.")
+    end
+
+    print ("Using regressor: " .. regressor .. ".")
+    if regressor == "shallow" then
+        regressor_network = regression.make_shallow_regressor(rep_dim, n_actions, n_objects, opt.gpu)
+    elseif regressor == "deep" then
+        local n_hid = 100
+        regressor_network = regression.make_deep_regressor(rep_dim, n_hid, n_actions, n_objects, opt.gpu)
+    else
+        error("Invalid regressor `" .. regressor .. "` supplied.")
+    end
+
+    -- Put the pieces together
+    opt.agent_params.network = (
+        nn.Sequential()
+        :add(rep_network)
+        :add(regressor_network)
+    )
 end
-
-
--- Put the pieces together
-opt.agent_params.network = (
-    nn.Sequential()
-    :add(rep_network)
-    :add(regressor_network)
-)
 
 
 -- Initialize the agent
@@ -241,8 +324,19 @@ local print = function(...)
     io.flush()
 end
 
+local gc = collectgarbage
+local collectgarbage = function(...)
+    local t1 = os.time()
+    print("Collecting garbage...")
+    print("BEFORE: " .. gc("count") / 1024 .. " MB in use.")
+    gc(...)
+    print("AFTER: " .. gc("count") / 1024 .. " MB in use.")
+    print("Done collecting garbage, took " .. (os.time() - t1) .. " seconds.")
+end
+
 local learn_start = agent.learn_start
 local start_time = sys.clock()
+local overall_start = os.time()
 local reward_counts = {}
 local episode_counts = {}
 local time_history = {}
@@ -312,7 +406,7 @@ while step < opt.steps do
             pos_reward_cnt = 0
         end
 
-        if step%1000 == 0 then
+        if step%GC_FREQ == 0 then
             collectgarbage()
         end
     end
@@ -332,6 +426,11 @@ while step < opt.steps do
         end
 
         gameLogger = gameLogger or io.open(paths.concat(opt.exp_folder, 'game.log'), 'w')
+        gameLogger:write("Args: {\n")
+        for k, v in pairs( opt ) do
+            gameLogger:write(tostring(k) .. ": " .. tostring(v) .. "\n")
+        end
+        gameLogger:write("}\n")
 
         state, reward, terminal, available_objects = framework.newGame(gameLogger)
 
@@ -356,11 +455,11 @@ while step < opt.steps do
                 local actions = framework.getActions()
                 local objects = framework.getObjects()
                 for i=1, #actions do
-                    gameLogger:write(actions[i],' ', q_func[1][i],'\n')
+                    gameLogger:write(actions[i],' ', q_func[i],'\n')
                 end
                 gameLogger:write("-----\n")
                 for i=1, #objects do
-                    gameLogger:write(objects[i],' ', q_func[2][i], '\n')
+                    gameLogger:write(objects[i],' ', q_func[i], '\n')
                 end
 
             else
@@ -384,7 +483,7 @@ while step < opt.steps do
                 end
             end
 
-            if estep%1000 == 0 then collectgarbage() end
+            if estep%GC_FREQ == 0 then collectgarbage() end
 
             -- record every reward
             episode_reward = episode_reward + reward
@@ -477,9 +576,26 @@ while step < opt.steps do
         agent.w, agent.dw, agent.g, agent.g2, agent.delta, agent.delta2,
             agent.deltas, agent.tmp = nil, nil, nil, nil, nil, nil, nil, nil
 
+        print("Saving network...")
+        print("BEFORE: " .. gc("count") / 1024 .. " MB in use.")
         local filename = opt.name
-        torch.save(filename .. ".t7", {agent = agent,
-                                model = agent.network,
+        -- torch.save(filename .. ".t7", {agent = agent,
+        --                         model = agent.network,
+        --                         best_model = agent.best_network,
+        --                         reward_history = reward_history,
+        --                         reward_counts = reward_counts,
+        --                         episode_counts = episode_counts,
+        --                         time_history = time_history,
+        --                         v_history = v_history,
+        --                         td_history = td_history,
+        --                         qmax_history = qmax_history,
+        --                         arguments=opt})
+        if save_network == nil then
+            save_network = agent.network
+        end
+
+        torch.save(filename .. ".t7", {
+                                model = save_network,
                                 best_model = agent.best_network,
                                 reward_history = reward_history,
                                 reward_counts = reward_counts,
@@ -489,6 +605,8 @@ while step < opt.steps do
                                 td_history = td_history,
                                 qmax_history = qmax_history,
                                 arguments=opt})
+        print("AFTER: " .. gc("count") / 1024 .. " MB in use.")
+
         if opt.saveNetworkParams then
             print('Network weight sum:', w:sum())
             local nets = {network=w:clone():float()}
@@ -538,3 +656,7 @@ while step < opt.steps do
         end
     end -- Saving
 end
+
+local overall_end = os.time()
+
+print("Total runtime: " .. (overall_end - overall_start) .. "seconds.")

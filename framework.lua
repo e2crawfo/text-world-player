@@ -2,7 +2,7 @@
 require 'utils'
 local _ = require "underscore"
 
-local DEBUG = true
+local DEBUG = false
 
 local DEFAULT_REWARD = -0.01
 local JUNK_CMD_REWARD = -0.1
@@ -22,7 +22,7 @@ rooms = {'Living', 'Garden', 'Kitchen','Bedroom'}
 
 actions = {"eat", "sleep", "watch", "exercise", "go"}
 objects = {'north','south','east','west'}
--- read the rest of the obejcts from build file
+-- read the rest of the objects from build file
 -- order in build file: tv, bike, apple, bed
 
 extra_vocab = {'not','but', 'now'} -- words that are necessary for initial vocab building but not in other text
@@ -30,6 +30,7 @@ symbols = {}
 symbol_mapping = {}
 
 local descriptions = {}
+local description_set = {}
 
 local NUM_ROOMS = 4
 local state_dim = 0
@@ -99,6 +100,8 @@ function parse_game_output(text)
     -- text is a list of sentences
     local reward = nil
     local text_to_agent = {current_room_description, get_quest_text()}
+    print (text_to_agent)
+
     for i=1, #text do
         if i < #text  and string.match(text[i], '<EOM>') then
             text_to_agent = {current_room_description, get_quest_text()}
@@ -122,10 +125,8 @@ end
 --take a step in the game
 function step_game(action_index, object_index, gameLogger)
     local command = build_command(actions[action_index], objects[object_index], gameLogger)
+    print("ACTION: " .. actions[action_index] .. ' ' .. objects[object_index])
     data_out(command)
-    if DEBUG then
-        print(actions[action_index] .. ' ' .. objects[object_index])
-    end
     STEP_COUNT = STEP_COUNT + 1
     return getState(gameLogger)
 end
@@ -138,6 +139,7 @@ function newGame(gameLogger)
     random_quest()
 
     if gameLogger then
+        gameLogger:write("NEW EPISODE\n")
     end
 
     return getState(gameLogger)
@@ -202,7 +204,9 @@ function addDescription(words, start_index)
         table.insert(desc, words[i])
     end
 
-    table.insert(descriptions, table.concat(desc, " "))
+    desc = table.concat(desc, " ")
+    table.insert(descriptions, desc)
+    description_set[desc] = 1
 end
 
 -- read in text data from ``filename``- nicely tokenized
@@ -245,23 +249,19 @@ function getState(logger, print_on, as_string)
     end
 
     data_out('look')
-    local inData2 = data_in()
-    while #inData2 == 0 or not string.match(inData2[#inData2],'<EOM>') do
-        TableConcat(inData2, data_in())
-    end
-    current_room_description = inData2[1]
+    current_room_description = data_in()[1]
 
-    print("Raw game text: ")
-    print(inData)
-    print("Room desc: " .. current_room_description)
+    while not description_set[current_room_description] do
+        data_out('look')
+        current_room_description = data_in()[1]
+    end
 
     local text, reward = parse_game_output(inData)
     text = table.concat(text, ' ')
+    print("\n" .. text)
+    print("REWARD: ", reward)
+
     if DEBUG or print_on then
-        print("Text for agent: ")
-        print(text)
-        print("Reward received: ")
-        print(reward)
 
         sleep(0.1)
         if reward > 0 then
@@ -306,7 +306,7 @@ end
 return {
     makeSymbolMapping = makeSymbolMapping,
     getStateDim = getStateDim,
-    getAllStrings = getAllStrings,
+    getAllStates = getAllStates,
     getActions = getActions,
     getObjects = getObjects,
     getState = getState,
