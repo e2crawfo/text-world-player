@@ -18,14 +18,14 @@ quest_actions = {'eat', 'sleep', 'watch' ,'exercise'} -- aligned to quests above
 current_quest = 0
 current_mislead = 0
 
-rooms = {'Living', 'Garden', 'Kitchen','Bedroom'}
+rooms = {'Living', 'Garden', 'Kitchen', 'Bedroom'}
 
 actions = {"eat", "sleep", "watch", "exercise", "go"}
 objects = {'north','south','east','west'}
 -- read the rest of the objects from build file
 -- order in build file: tv, bike, apple, bed
 
-extra_vocab = {'not','but', 'now'} -- words that are necessary for initial vocab building but not in other text
+extra_vocab = {'not', 'but', 'now'} -- words that are necessary for initial vocab building but not in other text
 symbols = {}
 symbol_mapping = {}
 
@@ -260,15 +260,6 @@ function getState(logger, print_on, as_string)
     text = table.concat(text, ' ')
     print("\n" .. text)
     print("REWARD: ", reward)
-
-    if DEBUG or print_on then
-
-        sleep(0.1)
-        if reward > 0 then
-            print(text, reward)
-            sleep(2)
-        end
-    end
 
     if reward >= 1 then
         --quest has been succesfully finished

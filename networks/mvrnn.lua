@@ -148,8 +148,6 @@ do
 
         self.u_shape = torch.LongStorage{n, r}
         self.v_shape = torch.LongStorage{r, n}
-        print("n, r: ", n, r)
-        print("my v: ", self.v_shape)
         self.a_shape = n
 
         self.w_shape = torch.LongStorage{n, 1}
@@ -366,7 +364,6 @@ do
             u_net:get(2).bias = self.mat_func(u_shape)
             self.U[word] = u_net
 
-            print("V: ", v_shape)
             v_net = (
                 nn.Sequential()
                 :add(nn.Constant(torch.zeros(v_shape)))

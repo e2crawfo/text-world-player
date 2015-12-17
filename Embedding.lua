@@ -35,7 +35,6 @@ do
 
         for i=1, #symbols do
             self.weight[i] = vector_function(self.weight:size(2), symbols[i])
-            print("wordvec", symbols[i], self.weight[i])
         end
     end
 end

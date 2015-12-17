@@ -67,6 +67,33 @@ do
 end
 
 do
+    local Lookup, _ = torch.class('Lookup', 'Text2Vector')
+
+    function Lookup:__init(all_states)
+        local use_cache = false
+        Text2Vector.__init(self, #all_states, use_cache)
+
+        self.max_state = 0
+        self.all_states = {}
+    end
+
+    function Lookup:fillVector(text, vector)
+        text = string.gsub(text, "{.","")
+
+        if not self.all_states[text] then 
+            self.max_state = self.max_state + 1
+            self.all_states[text] = self.max_state
+        end
+
+        vector[self.all_states[text]] = 1.0
+    end
+end
+
+local function make_lookup(all_states)
+    return Lookup(all_states), #all_states
+end
+
+do
     local BagOfWords, _ = torch.class('BagOfWords', 'Text2Vector')
 
     function BagOfWords:__init(symbols, symbol_mapping, use_cache)
@@ -169,27 +196,24 @@ do
     end
 
     function OrderedList:fillVector(text, vector)
-        local cnt, cnt2
+        local idx
 
         vector:fill(self.null_index)
 
         text = string.gsub(text, "{.","")
         local words = split(text, "%a+")
 
-        cnt = 1
-        for i, word in pairs(words) do
+        for i, word in ipairs(words) do
             word = word:lower()
             if self.reverse then
-                cnt2 = self.dimension + 1 - cnt
+                idx = self.dimension + 1 - i
             else
-                cnt2 = cnt
+                idx = i
             end
 
             if self.symbol_mapping[word] then
-                vector[cnt2] = self.symbol_mapping[word]
+                vector[idx] = self.symbol_mapping[word]
             end
-
-            cnt = cnt + 1
         end
     end
 end
@@ -351,6 +375,9 @@ end
 
 text_to_vector = {
     Text2Vector=Text2Vector,
+
+    Lookup=Lookup,
+    make_lookup=make_lookup,
 
     BagOfWords=BagOfWords,
     make_bow=make_bow,

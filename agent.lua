@@ -22,7 +22,7 @@ cmd:option('-max_repr_train', 0, 'Maximum representations to sample during train
 cmd:option('-r', 3, 'Rank for MVRNN')
 
 cmd:option('-name', '', 'filename used for saving network and training history')
-cmd:option('-network', '', 'reload pretrained network')
+cmd:option('-load_network', '', 'reload pretrained network')
 cmd:option('-agent_params', '', 'string of agent parameters')
 cmd:option('-seed', 1, 'fixed input seed for repeatable experiments')
 cmd:option('-saveNetworkParams', false,
@@ -135,182 +135,275 @@ if opt.agent_params then
     opt.agent_params.state_dim = state_dim
 end
 
-
-local wv_dim = opt.dimensions
-local random_vec_func = (
-    function (size)
-        return torch.rand(size)*0.02-0.01
-    end
-)
-local wv_init = opt.use_wordvec == 1 and readWordVec(WORDVEC_FILE) or nil
-local wv_func = nil
-
-if wv_init then
-    function make_wv_func (wv_init)
-        local function f (size, word)
-            return torch.Tensor(size):copy(wv_init[word])
-        end
-
-        return f
-    end
-
-    wv_func = make_wv_func(wv_init)
-else
-    wv_func = random_vec_func
+if opt.load_network == "0" then
+    opt.load_network = nil
 end
 
+if not opt.load_network then
+    local wv_dim = opt.dimensions
+    local wv_init = opt.use_wordvec == 1 and readWordVec(WORDVEC_FILE) or nil
+    local wv_func = nil
 
-local rep = opt.representation
-local rep_network = nil
-local rep_dim = nil
+    if wv_init then
+        function make_wv_func (wv_init)
+            local function f (size, word)
+                return torch.Tensor(size):copy(wv_init[word])
+            end
 
-local regressor = opt.regressor
-local regressor_network = nil
+            return f
+        end
 
-local save_network = nil
-
-local n_actions = #(framework.getActions())
-local n_objects = #(framework.getObjects())
-
-local all_text = table.concat(framework.getAllStates(), ' ')
-
-if rep == "mvrnn" or rep == "recnn" then
-    if regressor == "shallow" then
-        regressor_network = regression.make_shallow_regressor(wv_dim, n_actions, n_objects, opt.gpu)
-    elseif regressor == "deep" then
-        local n_hid = 100
-        regressor_network = regression.make_deep_regressor(wv_dim, n_hid, n_actions, n_objects, opt.gpu)
+        wv_func = make_wv_func(wv_init)
     else
-        error("Invalid regressor `" .. regressor .. "` supplied.")
+        wv_func = (
+            function (size)
+                return torch.rand(size)*0.02-0.01
+            end
+        )
     end
 
-    -- Get all words.
-    local all_words = mvrnn.get_all_words(all_text)
+    local rep = opt.representation
+    local rep_network = nil
+    local rep_dim = nil
 
-    local non_linearity = nn.Tanh()
-    local combine_mode = opt.combine_mode
-    local allow_new_words = false
+    local regressor = opt.regressor
+    local regressor_network = nil
 
-    local max_repr_train = opt.max_repr_train
+    local save_network = nil
 
-    -- If max_repr_train == 0, these are not used.
-    local rep_predictor = regressor_network:clone()
-    local rep_criterion = nn.MSECriterion()
+    local n_actions = #(framework.getActions())
+    local n_objects = #(framework.getObjects())
 
-    local wv_func = function (size) return torch.Tensor(size):normal(0, 1.0) end
+    local all_text = table.concat(framework.getAllStates(), ' ')
 
-    if rep == "mvrnn" then
-        print ("Using " .. opt.regressor .. " with MVRNN.")
+    if rep == "mvrnn" or rep == "recnn" then
+        if regressor == "shallow" then
+            regressor_network = regression.make_shallow_regressor(wv_dim, n_actions, n_objects, opt.gpu)
+        elseif regressor == "deep" then
+            local n_hid = 100
+            regressor_network = regression.make_deep_regressor(wv_dim, n_hid, n_actions, n_objects, opt.gpu)
+        else
+            error("Invalid regressor `" .. regressor .. "` supplied.")
+        end
 
-        local r = opt.r
+        -- Get all words.
+        local all_words = mvrnn.get_all_words(all_text)
 
-        local mat_func = function (size) return torch.Tensor(size):normal(0, 0.3) end
-        local a_func = function (size) return torch.Tensor(size):normal(1, 0.05) end
+        local non_linearity = nn.Tanh()
+        local combine_mode = opt.combine_mode
+        local allow_new_words = false
 
-        opt.agent_params.network, rep_dim = mvrnn.make_mvrnn(
-            wv_dim, r, all_words, non_linearity, regressor_network, rep_predictor,
-            rep_criterion, combine_mode, mat_func, a_func, wv_func, allow_new_words,
-            max_repr_train)
+        local max_repr_train = opt.max_repr_train
 
-        -- A compact version of the network for saving only the things that need to be saved
-        save_network = opt.agent_params.network:clone()
+        -- If max_repr_train == 0, these are not used.
+        local rep_predictor = regressor_network:clone()
+        local rep_criterion = nn.MSECriterion()
 
-        save_network.U = opt.agent_params.network.U
-        save_network.V = opt.agent_params.network.V
-        save_network.A = opt.agent_params.network.A
-        save_network.word_vecs = opt.agent_params.network.word_vecs
+        local wv_func = function (size) return torch.Tensor(size):normal(0, 1.0) end
 
-        save_network.U_shape = opt.agent_params.network.U_shape
-        save_network.V_shape = opt.agent_params.network.V_shape
-        save_network.w_shape = opt.agent_params.network.w_shape
-        save_network.a_shape = opt.agent_params.network.a_shape
+        if rep == "mvrnn" then
+            print ("Using " .. opt.regressor .. " with MVRNN.")
 
-        save_network.W = opt.agent_params.network.W
-        save_network.WM = opt.agent_params.network.WM
+            local r = opt.r
 
-        save_network.predictor = opt.agent_params.network.predictor
-        save_network.repr_predictor = opt.agent_params.network.repr_predictor
-        save_network.repr_criterion = opt.agent_params.network.repr_criterion
+            local mat_func = function (size) return torch.Tensor(size):normal(0, 0.3) end
+            local a_func = function (size) return torch.Tensor(size):normal(1, 0.05) end
 
-    elseif rep == "recnn" then
-        print ("Using " .. opt.regressor .. " with RecNN.")
+            opt.agent_params.network, rep_dim = mvrnn.make_mvrnn(
+                wv_dim, r, all_words, non_linearity, regressor_network, rep_predictor,
+                rep_criterion, combine_mode, mat_func, a_func, wv_func, allow_new_words,
+                max_repr_train)
 
-        opt.agent_params.network, rep_dim = recursive_nn.make_recnn(
-            wv_dim, all_words, non_linearity, regressor_network, rep_predictor,
-            rep_criterion, combine_mode, wv_func, allow_new_words, max_repr_train)
+            -- A compact version of the network for saving only the things that need to be saved
+            save_network = opt.agent_params.network:clone()
 
-        -- A compact version of the network for saving only the things that need to be saved
-        save_network = opt.agent_params.network:clone()
+            save_network.U = opt.agent_params.network.U
+            save_network.V = opt.agent_params.network.V
+            save_network.A = opt.agent_params.network.A
+            save_network.word_vecs = opt.agent_params.network.word_vecs
 
-        save_network.word_vecs = opt.agent_params.network.word_vecs
-        save_network.w_shape = opt.agent_params.network.w_shape
-        save_network.W = opt.agent_params.network.W
+            save_network.U_shape = opt.agent_params.network.U_shape
+            save_network.V_shape = opt.agent_params.network.V_shape
+            save_network.w_shape = opt.agent_params.network.w_shape
+            save_network.a_shape = opt.agent_params.network.a_shape
 
-        save_network.predictor = opt.agent_params.network.predictor
-        save_network.repr_predictor = opt.agent_params.network.repr_predictor
-        save_network.repr_criterion = opt.agent_params.network.repr_criterion
+            save_network.W = opt.agent_params.network.W
+            save_network.WM = opt.agent_params.network.WM
+
+            save_network.predictor = opt.agent_params.network.predictor
+            save_network.repr_predictor = opt.agent_params.network.repr_predictor
+            save_network.repr_criterion = opt.agent_params.network.repr_criterion
+
+        elseif rep == "recnn" then
+            print ("Using " .. opt.regressor .. " with RecNN.")
+
+            opt.agent_params.network, rep_dim = recursive_nn.make_recnn(
+                wv_dim, all_words, non_linearity, regressor_network, rep_predictor,
+                rep_criterion, combine_mode, wv_func, allow_new_words, max_repr_train)
+
+            -- A compact version of the network for saving only the things that need to be saved
+            save_network = opt.agent_params.network:clone()
+
+            save_network.word_vecs = opt.agent_params.network.word_vecs
+            save_network.w_shape = opt.agent_params.network.w_shape
+            save_network.W = opt.agent_params.network.W
+
+            save_network.predictor = opt.agent_params.network.predictor
+            save_network.repr_predictor = opt.agent_params.network.repr_predictor
+            save_network.repr_criterion = opt.agent_params.network.repr_criterion
+        else
+            error("Unrecognized representation: " .. rep)
+        end
+
     else
-        error("Unrecognized representation: " .. rep)
+        print ("Using representation: " .. rep .. ".")
+
+        local rv_func = (
+            function (size)
+                return torch.rand(size) - 0.5
+            end
+        )
+
+        if rep == "lookup" then
+            rep_network, rep_dim = text_to_vector.make_lookup(framework.getAllStates())
+        elseif rep == "random" then
+            rep_network, rep_dim = text_to_vector.make_random(rv_func, wv_dim)
+        elseif rep == "sentence" then
+            rep_network, rep_dim = sentence_vectors.make_rvps(
+                all_text, opt.combine_mode, rv_func, wv_dim, true, false)
+        elseif rep == "bow" then
+            rep_network, rep_dim = text_to_vector.make_bow(symbols, symbol_mapping)
+        elseif rep == "bob" then
+            rep_network, rep_dim = text_to_vector.make_bob(symbols, symbol_mapping)
+        elseif rep == "lstm" or "rnn" then
+            recurrent_dim = opt.recurrent_dim
+            ol_network, ol_dim = text_to_vector.make_ordered_list(symbols, symbol_mapping, recurrent_dim)
+
+            print("#symbols", #symbols)
+            print(symbols)
+
+            -- Need to set this global variable before creating LSTM or RNN
+            EMBEDDING = Embedding(#symbols+1, wv_dim)
+            EMBEDDING:setWordVecs(symbols, wv_func)
+            print("ESIZE: ", EMBEDDING.weight:size())
+            print("EMBEDDING: ", EMBEDDING.weight)
+
+            if rep == "lstm" then
+                rep_network, rep_dim = lstm.make_lstm(opt.agent_params.hist_len, opt.gpu)
+            else
+                rep_network, rep_dim = rnn.make_rnn(
+                    recurrent_dim, opt.agent_params.hist_len, opt.gpu)
+            end
+
+            rep_network = (
+                nn.Sequential()
+                :add(ol_network)
+                :add(rep_network))
+        else
+            error("Invalid representation `" .. rep .. "` supplied.")
+        end
+
+        print ("Using regressor: " .. regressor .. ".")
+        if regressor == "shallow" then
+            regressor_network = regression.make_shallow_regressor(rep_dim, n_actions, n_objects, opt.gpu)
+        elseif regressor == "deep" then
+            local n_hid = 100
+            regressor_network = regression.make_deep_regressor(rep_dim, n_hid, n_actions, n_objects, opt.gpu)
+        else
+            error("Invalid regressor `" .. regressor .. "` supplied.")
+        end
+
+        -- Put the pieces together
+        opt.agent_params.network = (
+            nn.Sequential()
+            :add(rep_network)
+            :add(regressor_network)
+        )
     end
 
 else
-    print ("Using representation: " .. rep .. ".")
+    print("Loading previous network from " .. opt.load_network)
+    local loaded = torch.load(opt.load_network)
+    opt.agent_params.network = loaded.model
+    saved_opt = loaded.arguments
 
-    local rv_func = (
-
-        function (size)
-            return torch.rand(size) - 0.5
-        end
-    )
-
-    if rep == "random" then
-        rep_network, rep_dim = text_to_vector.make_random(rv_func, wv_dim)
-    elseif rep == "sentence" then
-        rep_network, rep_dim = sentence_vectors.make_rvps(
-            all_text, opt.combine_mode, rv_func, wv_dim, true, false)
-    elseif rep == "bow" then
-        rep_network, rep_dim = text_to_vector.make_bow(symbols, symbol_mapping)
-    elseif rep == "bob" then
-        rep_network, rep_dim = text_to_vector.make_bob(symbols, symbol_mapping)
-    elseif rep == "lstm" or "rnn" then
-        recurrent_dim = opt.recurrent_dim
-        ol_network, ol_dim = text_to_vector.make_ordered_list(symbols, symbol_mapping, recurrent_dim)
-
-        -- Need to set this global variable before creating LSTM or RNN
-        EMBEDDING = Embedding(#symbols+1, wv_dim)
-        EMBEDDING:setWordVecs(symbols, wv_func)
-
-        if rep == "lstm" then
-            rep_network, rep_dim = lstm.make_lstm(opt.agent_params.hist_len, opt.gpu)
-        else
-            rep_network, rep_dim = rnn.make_rnn(
-                recurrent_dim, opt.agent_params.hist_len, opt.gpu)
-        end
-
-        rep_network = (
-            nn.Sequential()
-            :add(ol_network)
-            :add(rep_network))
-    else
-        error("Invalid representation `" .. rep .. "` supplied.")
+    print("Previous network args: {")
+    for k, v in pairs( saved_opt ) do
+        print(tostring(k) .. ": " .. tostring(v) .. "")
     end
+    print("}")
+
+    local rep = saved_opt.representation
+    local regressor = saved_opt.regressor
+
+    local n_actions = #(framework.getActions())
+    local n_objects = #(framework.getObjects())
+
+    local saved_regressor_net = nil
+    if rep == "mvrnn" or rep == "recnn" then
+        saved_regressor_net = opt.agent_params.network.predictor
+    else
+        saved_regressor_net = opt.agent_params.network:get(2)
+    end
+    -- Assumes that regressor an instance of nn.Sequential, and its first module is a reshape
+    local rep_dim = saved_regressor_net:get(1).size[1]
+    print("Rep dim: ", rep_dim)
 
     print ("Using regressor: " .. regressor .. ".")
     if regressor == "shallow" then
-        regressor_network = regression.make_shallow_regressor(rep_dim, n_actions, n_objects, opt.gpu)
+        regressor_network = regression.make_shallow_regressor(rep_dim, n_actions, n_objects, saved_opt.gpu)
     elseif regressor == "deep" then
         local n_hid = 100
-        regressor_network = regression.make_deep_regressor(rep_dim, n_hid, n_actions, n_objects, opt.gpu)
+        regressor_network = regression.make_deep_regressor(rep_dim, n_hid, n_actions, n_objects, saved_opt.gpu)
     else
         error("Invalid regressor `" .. regressor .. "` supplied.")
     end
 
-    -- Put the pieces together
-    opt.agent_params.network = (
-        nn.Sequential()
-        :add(rep_network)
-        :add(regressor_network)
-    )
+    if rep == "mvrnn" or rep == "recnn" then
+        opt.agent_params.network.predictor = regressor_network
+
+        if rep == "mvrnn" then
+            -- A compact version of the network for saving only the things that need to be saved
+            save_network = opt.agent_params.network:clone()
+
+            save_network.U = opt.agent_params.network.U
+            save_network.V = opt.agent_params.network.V
+            save_network.A = opt.agent_params.network.A
+            save_network.word_vecs = opt.agent_params.network.word_vecs
+
+            save_network.U_shape = opt.agent_params.network.U_shape
+            save_network.V_shape = opt.agent_params.network.V_shape
+            save_network.w_shape = opt.agent_params.network.w_shape
+            save_network.a_shape = opt.agent_params.network.a_shape
+
+            save_network.W = opt.agent_params.network.W
+            save_network.WM = opt.agent_params.network.WM
+
+            save_network.predictor = opt.agent_params.network.predictor
+            save_network.repr_predictor = opt.agent_params.network.repr_predictor
+            save_network.repr_criterion = opt.agent_params.network.repr_criterion
+        elseif rep == "recnn" then
+            -- A compact version of the network for saving only the things that need to be saved
+            save_network = opt.agent_params.network:clone()
+
+            save_network.word_vecs = opt.agent_params.network.word_vecs
+            save_network.w_shape = opt.agent_params.network.w_shape
+            save_network.W = opt.agent_params.network.W
+
+            save_network.predictor = opt.agent_params.network.predictor
+            save_network.repr_predictor = opt.agent_params.network.repr_predictor
+            save_network.repr_criterion = opt.agent_params.network.repr_criterion
+        else
+            error("Unrecognized representation: " .. rep)
+        end
+    else
+        local rep_network = opt.agent_params.network:get(1)
+        opt.agent_params.network = (
+            nn.Sequential()
+            :add(rep_network)
+            :add(regressor_network)
+        )
+    end
 end
 
 
@@ -579,17 +672,6 @@ while step < opt.steps do
         print("Saving network...")
         print("BEFORE: " .. gc("count") / 1024 .. " MB in use.")
         local filename = opt.name
-        -- torch.save(filename .. ".t7", {agent = agent,
-        --                         model = agent.network,
-        --                         best_model = agent.best_network,
-        --                         reward_history = reward_history,
-        --                         reward_counts = reward_counts,
-        --                         episode_counts = episode_counts,
-        --                         time_history = time_history,
-        --                         v_history = v_history,
-        --                         td_history = td_history,
-        --                         qmax_history = qmax_history,
-        --                         arguments=opt})
         if save_network == nil then
             save_network = agent.network
         end

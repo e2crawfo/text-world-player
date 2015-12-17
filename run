@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#Usage : ./run_cpu <game_num> <step_size> <rep> <regressor> <name> <r> <combine_mode> <dimensions> <max_repr_train>
+#Usage : ./run_cpu <game_num> <step_size> <rep> <regressor> <name> <r> <combine_mode> <dimensions> <load_network>
 #game_num is 1, 2, 3 ...
 #----------------------------------
 
@@ -11,6 +11,7 @@ minibatch_size=64 #batch size of transitions used in updates
 quest_levels=1
 game_num=$1
 n_replay=1
+load_network=$9
 
 steps=50000
 eval_freq=$STEP_SIZE
@@ -34,10 +35,7 @@ regressor=$4
 r=$6
 combine_mode=$7
 dimensions=$8
-max_repr_train=$9
-
-# You can also start by loading a model from a previous run
-# netfile="\"logs/run1\""
+max_repr_train=0
 
 #params for DQN
 update_freq=4
@@ -45,7 +43,6 @@ actrep=1
 discount=0.5
 seed=1
 learn_start=$STEP_SIZE
-initial_priority="false"
 replay_memory=100000
 eps=1
 eps_end=0.2
@@ -62,11 +59,11 @@ mkdir -p $exp_folder;
 
 agent_type=$exp_folder"/DQN"
 agent_name=$agent_type
-recurrent_dim=100
+recurrent_dim=30
 ncols=1
 agent_params="lr="$lr",ep="$eps",ep_end="$eps_end",ep_endt="$eps_endt",discount="$discount",hist_len="$hist_len",learn_start="$learn_start",replay_memory="$replay_memory",update_freq="$update_freq",n_replay="$n_replay",minibatch_size="$minibatch_size",rescale_r=1,ncols="$ncols",bufferSize=512,valid_size=500,target_q="$STEP_SIZE",clip_delta=1,min_reward=-1,max_reward=10"
 
-args="-representation $representation -r $r -max_repr_train $max_repr_train -dimensions $dimensions -combine_mode $combine_mode -regressor $regressor -name $agent_name -agent_params $agent_params -steps $steps -eval_freq $eval_freq -eval_steps $eval_steps -prog_freq $prog_freq -save_freq $save_freq -actrep $actrep -gpu $gpu -seed $seed -threads $num_threads"
+args="-representation $representation -r $r -max_repr_train $max_repr_train -dimensions $dimensions -combine_mode $combine_mode -regressor $regressor -name $agent_name -agent_params $agent_params -steps $steps -eval_freq $eval_freq -eval_steps $eval_steps -prog_freq $prog_freq -save_freq $save_freq -actrep $actrep -gpu $gpu -seed $seed -threads $num_threads -load_network $load_network"
 echo $args
 
 th agent.lua $args -saveNetworkParams -exp_folder $exp_folder  -game_num $game_num -quest_levels $quest_levels -recurrent_dim  $recurrent_dim -max_steps $max_steps -tutorial_world $tutorial_world -random_test $random_test -analyze_test $analyze_test -text_world_location $text_world_location;

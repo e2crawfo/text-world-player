@@ -42,12 +42,13 @@ function LSTM:buildModel()
    local concat4 = nn.ConcatTable()
    concat4:add(output):add(nn.SelectTable(3))
    model:add(concat4)
-   print(model)
    return model
 end
 
 
 function LSTM:updateOutput(input)
+   -- print("LSTM input: ", symbols[input[1]])
+
    local prevOutput, prevCell
    if self.step == 1 then
       prevOutput = self.zeroTensor
@@ -98,6 +99,7 @@ function LSTM:updateOutput(input)
    self.accGradParametersStep = nil
    self.gradParametersAccumulated = false
    -- note that we don't return the cell, just the output
+   -- print(self.output)
    return self.output
 end
 
@@ -105,7 +107,7 @@ end
 do
     local NoBackwardSplitTable = torch.class('NBSplitTable', 'nn.SplitTable')
 
-    -- Do this because LSTM backward does not work properly.
+    -- Do this because LSTM:backward does not work properly.
     function NBSplitTable:updateGradInput(input, gradOutput)
         self.gradInput:resizeAs(input):zero()
         return self.gradInput
